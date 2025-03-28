@@ -1,0 +1,10 @@
+{
+  "ImgCal": {
+    "bias_subtraction",
+    "dark_subtraction", 
+    "flat_fielding"
+  }
+}
+
+
+

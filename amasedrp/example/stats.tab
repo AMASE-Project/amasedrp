@@ -1,0 +1,6 @@
+{
+    "raw_g1_0000001.fits":{
+        "ImgCal.bias_subtraction",
+        "ImgCal.dark_subtraction"
+    }
+}
