@@ -36,12 +36,12 @@ def preprocess_image(
         master_bias_frame: Optional[str] = None,
         master_dark_frame: Optional[str] = None,
         master_pixflat_frame: Optional[str] = None,
-        replace_with_nan: bool = True,
         reject_cosmic_rays: bool = True,
+        replace_with_nan: bool = True,
         display_plots: bool = False,
 ):
     """Preprocess a raw 2D image by applying bias subtraction,
-    dark subtraction, pixel flat fielding and cosmic rays rejection.
+    dark subtraction, pixel flat fielding, cosmic rays rejection, etc.
 
     Parameters
     ----------
@@ -55,11 +55,12 @@ def preprocess_image(
         path to the master dark frame, by default None
     master_pixflat_frame : Optional[str], optional
         path to the master pixel flat frame, by default None
-    replace_with_nan : bool, optional
-        whether to replace NaN values with zeros, by default True
     reject_cosmic_rays : bool, optional
         whether to reject cosmic rays from the output preprocessed image,
         by default True
+    replace_with_nan : bool, optional
+        whether to replace masked pixels with NaNs in the preprocessed image,
+        by default Trues
     display_plots : bool, optional
         whether to show plots of the images, by default False
 
@@ -118,38 +119,53 @@ def preprocess_image(
         print("Using dummy array as master pixel flat frame.")
     print('\n')
 
+    # NOTE:
+    # bias frame       = bias level + readout noise
+    # dark frame       = dark current * exposure time
+    #                    + bias level + readout noise
+    # pixel flat frame = uniform illumination * pixel response
+    #                    + dark current * exposure time
+    #                    + bias level + readout noise
+    # science frame    = signal * pixel response
+    #                    + dark current * exposure time
+    #                    + bias level + readout noise
+    #
+    # darkcurr' = (dark - bias) / dark exposure time
+    # flat'     = (flat - bias) - darkcurr' * flat exposure time
+    # pixresp'  = flat' / median(flat')
+    #
+    # bias subtraction:    S1 = science - bias
+    # dark subtraction:    S2 = S1 - darkcurr' * science exposure time
+    # pixel flat fielding: S3 = S2 / pixresp'
+
+    # preparation for preprocessing
+    darkcurr_arr = ((mdark_img.data - mbias_img.data)
+                    / mdark_img.header['EXPTIME'])
+    flat_arr = ((mpflat_img.data - mbias_img.data)
+                - darkcurr_arr * mpflat_img.header['EXPTIME'])
+    pixresp_arr = flat_arr / np.nanmedian(flat_arr)
+
     # create a copy of the input image for preprocessing
     out_img = in_img.copy()
     # ensure the output image is in float format
     if not np.issubdtype(out_img.data.dtype, np.floating):
         out_img.data = out_img.data.astype(np.float32)
 
-    # apply bias subtraction
-    # (Note: bias = readout noise)
+    # bias subtraction
     print("Applying master bias subtraction...")
     out_img.data -= mbias_img.data
     print("Master bias subtraction applied.")
     print('\n')
 
-    # apply dark subtraction
-    # (Note: dark = thermal noise + readout noise
-    #             = dark current * exposure time + readout noise)
+    # dark subtraction
     print("Applying master dark subtraction...")
-    dark_array = ((mdark_img.data - mbias_img.data)
-                  / mdark_img.header['EXPTIME']
-                  * in_img.header['EXPTIME'])
-    out_img.data -= dark_array
-    del dark_array
+    out_img.data -= darkcurr_arr * in_img.header['EXPTIME']
     print("Master dark subtraction applied.")
     print('\n')
 
-    # apply pixel flat fielding
+    # pixel flat fielding
     print("Applying master pixel flat fielding...")
-    flat_array = ((mpflat_img.data - mbias_img.data)
-                  / mpflat_img.header['EXPTIME']
-                  * in_img.header['EXPTIME'])
-    out_img.data /= flat_array
-    del flat_array
+    out_img.data / pixresp_arr
     print("Master pixel flat fielding applied.")
     print('\n')
 
@@ -167,11 +183,12 @@ def preprocess_image(
     out_img.mask = np.logical_or(out_img.mask, out_img_inf_pixels)
 
     # replace masked pixels with NaNs if requested
-    # TODO: Check this part
+    # # TODO: Check how to handle with the "Bitmasks"
     if replace_with_nan:
-        out_img.data[out_img.mask] = np.nan
-        print("Masked pixels replaced with NaNs")
-        print('\n')
+        # out_img.data[out_img.mask] = np.nan
+        pass
+        # print("Masked pixels replaced with NaNs")
+        # print('\n')
 
     # propagate the header
     # # TODO: Check the following keywords
