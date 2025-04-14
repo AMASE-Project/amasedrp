@@ -77,6 +77,7 @@ def preprocess_image(
     print(f"Input image loaded from {input_image}")
     print('\n')
     # TODO: add a logger to log the preprocessing steps
+    # TODO: deal with the overscan region
 
     # read the master bias frame
     if master_bias_frame and os.path.isfile(master_bias_frame):
@@ -165,14 +166,19 @@ def preprocess_image(
 
     # pixel flat fielding
     print("Applying master pixel flat fielding...")
-    out_img.data / pixresp_arr
+    out_img.data /= pixresp_arr
     print("Master pixel flat fielding applied.")
     print('\n')
 
     # apply cosmic rays rejection
     if reject_cosmic_rays:
         print("Rejecting cosmic rays...")
-        # out_img.rejectCosmicRays()  # TODO: finish this function
+        mask, clean = in_img.rejectCosmicRays(overwrite=False)
+        out_img.data[mask] = np.nan
+        out_img.mask_cosmic_rays = mask
+        out_img.mask = (out_img.mask | mask if out_img.mask is not None
+                        else mask)
+        del mask, clean
         print("Cosmic rays rejected.")
         print('\n')
 

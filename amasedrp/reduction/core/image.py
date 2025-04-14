@@ -8,9 +8,10 @@
 '''
 
 import copy
-from astropy.io import fits
 from typing import Any, Optional
 from numpy.typing import NDArray
+from astropy.io import fits
+from astroscrappy import detect_cosmics
 
 
 class Image():
@@ -106,10 +107,90 @@ class Image():
             Exposure time of the image.
         """
         if self.header is not None:
-            return self.header['EXPTIME']  # TODO: Which keyword to use
+            return self.header['EXPTIME']
         else:
             return None
 
-    # TODO: Finish the following method
-    def rejectCosmicRays(self):
-        pass
+    def rejectCosmicRays(
+            self,
+            sigclip: float = 4.5,
+            sigfrac: float = 0.3,
+            niter: int = 4,
+            overwrite: bool = True,
+            verbose: bool = False,
+            ) -> Optional[tuple]:
+        """
+        Detect and reject cosmic rays using the L.A.Cosmic algorithm,
+        based on Laplacian edge detection (van Dokkum 2001).
+
+        This method is designed to be efficient and fast, utilizing
+        the C/Cython implementation of `astroscrappy.detect_cosmics()`.
+
+        Parameters
+        ----------
+        sigclip : float, optional
+            Laplacian-to-noise limit for cosmic ray detection.
+            Lower values will flag more pixels as cosmic rays. By default 4.5
+        sigfrac : float, optional
+            Fractional detection limit for neighboring pixels.
+            For cosmic ray neighbor pixels, a lapacian-to-noise detection limit
+            of sigfrac * sigclip will be used. By default 0.3
+        niter : int, optional
+            Number of iterations of the LA Cosmic algorithm to perform.
+            By default 4
+        overwrite : bool, optional
+            If True, overwrite `self.data` with cleaned data and update masks.
+            If False, return the cleaned results and cosmic ray mask.
+            By default True.
+        verbose : bool, optional
+            Print detailed processing information to the screen or not.
+            By default False.
+
+        Returns
+        -------
+        Optional[tuple]:
+            A tuple (mask, clean) if overwrite is False, otherwise None.
+            `mask` is a boolean array indicating detected cosmic rays, and
+            `clean` is the cleaned image.
+
+        References:
+        -------
+        - van Dokkum (2001):
+            https://iopscience.iop.org/article/10.1086/323894
+        - astroscrappy GitHub:
+            https://github.com/astropy/astroscrappy
+        - astroscrappy Docs:
+            https://astroscrappy.readthedocs.io/en/latest/api/astroscrappy.detect_cosmics.html
+        """
+        # TODO: add/adjust/test more default parameters for this function.
+        mask, clean = detect_cosmics(
+            self.data,
+            inmask=None,
+            inbkg=None,
+            invar=None,
+            sigclip=sigclip,
+            sigfrac=sigfrac,
+            objlim=5.0,
+            gain=1.0,
+            readnoise=6.5,
+            satlevel=65536.0,
+            niter=niter,
+            sepmed=True,
+            cleantype='meanmask',
+            fsmode='median',
+            psfmodel='gauss',
+            psffwhm=2.5,
+            psfsize=7,
+            psfk=None,
+            psfbeta=4.765,
+            verbose=verbose,
+        )
+
+        # overwrite the original data with the cleaned data and update the mask
+        if overwrite:
+            self.data = clean
+            self.mask_cosmic_rays = mask
+            # propagate the mask
+            self.mask = self.mask | mask if self.mask is not None else mask
+        else:
+            return mask, clean
