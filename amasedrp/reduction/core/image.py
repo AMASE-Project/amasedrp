@@ -111,6 +111,25 @@ class Image():
         else:
             return None
 
+    def keepOnlyTrimSection(self) -> None:
+        """Keep only the trimmed section of the image data."""
+        # check if 'TRIMSEC' keyword exists in the header
+        if 'TRIMSEC' not in self.header:
+            raise KeyError("The 'TRIMSEC' keyword is not found in the header.")
+        # parse the TRIMSEC keyword
+        trimsec = self.header['TRIMSEC'].strip('[]')
+        col_range, row_range = trimsec.split(',')
+        col_start, col_end = map(int, col_range.split(':'))
+        row_start, row_end = map(int, row_range.split(':'))
+        # covert to 0-based indexing
+        col_start, col_end = col_start - 1, col_end - 1
+        row_start, row_end = row_start - 1, row_end - 1
+        # keep only the trimmed section of the image data
+        self.data = self.data[row_start:row_end + 1, col_start:col_end + 1]
+        # update the header
+        del self.header['TRIMSEC']
+        # TODO: anything else to update in the header?
+
     def rejectCosmicRays(
             self,
             sigclip: float = 4.5,

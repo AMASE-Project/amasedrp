@@ -38,6 +38,7 @@ def preprocess_image(
         master_pixflat_frame: Optional[str] = None,
         reject_cosmic_rays: bool = True,
         replace_with_nan: bool = True,
+        keep_only_trim: bool = True,
         display_plots: bool = False,
 ):
     """Preprocess a raw 2D image by applying bias subtraction,
@@ -116,9 +117,19 @@ def preprocess_image(
         mpflat_img = Image(data=np.ones_like(in_img.data), header={})
         mpflat_img.data *= np.max([np.nanmax(mbias_img.data)*100., 10000.])
         mpflat_img.header['EXPTIME'] = in_img.header['EXPTIME']
+        mpflat_img.header['TRIMSEC'] = in_img.header['TRIMSEC']
         print("No master pixel flat frame provided or file not found.")
         print("Using dummy array as master pixel flat frame.")
     print('\n')
+
+    # keep only the trimmed section of the image
+    if keep_only_trim:
+        in_img.keepOnlyTrimSection()
+        mbias_img.keepOnlyTrimSection()
+        mdark_img.keepOnlyTrimSection()
+        mpflat_img.keepOnlyTrimSection()
+        print("Only the trimmed section of the images kept.")
+        print('\n')
 
     # NOTE:
     # bias frame       = bias level + readout noise
