@@ -12,6 +12,7 @@ import os
 import numpy as np
 from typing import Optional
 import matplotlib.pyplot as plt
+from astropy.io.fits import Header
 from ..core.image import Image
 
 
@@ -114,7 +115,7 @@ def preprocess_image(
             mpflat_img.data = mpflat_img.data.astype(np.float32)
         print(f"Master pixel flat frame loaded from {master_pixflat_frame}")
     else:
-        mpflat_img = Image(data=np.ones_like(in_img.data), header={})
+        mpflat_img = Image(data=np.ones_like(in_img.data), header=Header())
         mpflat_img.data *= np.max([np.nanmax(mbias_img.data)*100., 10000.])
         mpflat_img.header['EXPTIME'] = in_img.header['EXPTIME']
         mpflat_img.header['TRIMSEC'] = in_img.header['TRIMSEC']
