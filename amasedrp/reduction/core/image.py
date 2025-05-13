@@ -9,9 +9,13 @@
 
 import copy
 from typing import Any, Optional
+import numpy as np
 from numpy.typing import NDArray
+from numpy.polynomial.legendre import Legendre
 from astropy.io import fits
 from astroscrappy import detect_cosmics
+from scipy.signal import find_peaks
+from numba import jit, prange
 
 
 class Image():
@@ -213,3 +217,187 @@ class Image():
             self.mask = self.mask | mask if self.mask is not None else mask
         else:
             return mask, clean
+
+    def identifyFibers(
+            self,
+            disp_band_half_width: int = 50,
+            threshold_fraction: float = 0.5) -> tuple:
+        """Fiber identification and tracing are both based on the continuum
+        lamp image (#TODO: check this).
+        The approach largely follows the methodology used in the DESI pipeline.
+        For details refer to their paper (Guy et al. 2023).
+
+        The fiber identification process is as follows:
+        1.  central band (a number of central rows) from the image are selected
+            (assuming the x-axis is cross-dispersion direction and the y-axis
+            is dispersion direction), and the median cross-dispersion profile
+            of these rows is calculated.s
+        2.  isolated peaks are identified in this profile, to estimate the
+            total number of fibers and their approximate x-axis positions.
+
+        Parameters
+        ----------
+        disp_band_half_width : int, optional
+            Half width of the central band for fiber identification.
+            By default 50.
+        threshold_fraction : float, optional
+            Only peaks with a height greater than this fraction of the maximum
+            intensity of the profile are considered.
+            By default 0.5.
+
+        Returns
+        -------
+        n_fibers : int
+            The number of fibers identified in the image.
+        fiber_approx_positions : NDArray[np.integer]
+            The approximate x-axis positions of the fibers.
+            This is a 1D array of length n_fibers.
+        """
+        center_row = self.dimensions[0] // 2
+        start_row = int(center_row - disp_band_half_width)
+        end_row = int(center_row + disp_band_half_width)
+        band = self.data[start_row:end_row, :]
+        profile = np.nanmedian(band, axis=0)
+        peaks, _ = find_peaks(
+            profile, height=threshold_fraction*np.nanmax(profile))
+        n_fibers = len(peaks)
+        fiber_approx_positions = peaks
+        return n_fibers, fiber_approx_positions
+
+    def traceFibers(
+            self,
+            idensity_fibers_disp_band_half_width: int = 50,
+            idensity_fibers_threshold_fraction: float = 0.5,
+            tracing_max_shift: float = 1.,
+            tracing_cdisp_half_width: int = 3,
+            tracing_threshold_fraction: float = 0.1,
+            legendre_fitting: bool = True,
+            legendre_fitting_deg: int = 10) -> NDArray[Any]:
+        """
+        # TODO: add more details about the fiber tracing process.
+        """
+        # identify the fibers and estimate their approximate positions
+        n_fibers, fiber_approx_positions = self.identifyFibers(
+            disp_band_half_width=idensity_fibers_disp_band_half_width,
+            threshold_fraction=idensity_fibers_threshold_fraction)
+        # trace the barycenter positions of all fibers
+        barycenter_traces = _trace_fibers_barycenter_positions(
+            image_data=self.data,
+            n_fibers=n_fibers,
+            fiber_approx_positions=fiber_approx_positions,
+            tracing_max_shift=tracing_max_shift,
+            tracing_cdisp_half_width=tracing_cdisp_half_width,
+            tracing_threshold_fraction=tracing_threshold_fraction)
+        # fiber traces
+        traces = []
+        for idx in range(n_fibers):
+            trace = {}
+            trace['FiberID'] = f'{idx:03d}'
+            trace['Barycenter'] = barycenter_traces[idx]
+            if legendre_fitting:
+                trace['LegendreFittingModel'] \
+                    = _legendre_fitting_barycenter_trace(
+                        trace['Barycenter'], deg=legendre_fitting_deg)
+            traces.append(trace)
+        traces = np.array(traces)
+        return traces
+
+
+@jit(nopython=True)
+def _calculate_fiber_barycenter_position(
+        image_data: NDArray[np.floating],
+        row: int,
+        guess_position: float,
+        max_shift: float = 1.,
+        cdisp_half_width: int = 3,
+        threshold_fraction: float = 0.1) -> float:
+    barycenter = -1.
+    if guess_position >= 0:
+        n_cols = image_data.shape[1]
+        col_start = guess_position - cdisp_half_width
+        col_end = guess_position + cdisp_half_width + 1
+        col_start = round(max(col_start, 0))
+        col_end = round(min(col_end, n_cols - 1))
+        profile = image_data[row, col_start:col_end]
+        if np.nansum(profile) > (
+            threshold_fraction * np.nanmax(image_data)
+        ):
+            col_range = np.arange(col_start, col_end, 1)
+            barycenter = (
+                np.nansum(profile * col_range) / np.nansum(profile)
+            )
+            if np.abs(barycenter - guess_position) > max_shift:
+                barycenter = -1.
+    return barycenter
+
+
+@jit(nopython=True)
+def _trace_fiber_barycenter_positions(
+        image_data: NDArray[np.floating],
+        ini_guess_position: float,
+        max_shift: float = 1.,
+        cdisp_half_width: int = 3,
+        threshold_fraction: float = 0.1) -> list:
+    n_rows = image_data.shape[0]
+    center_row = n_rows // 2
+    trace = np.full(n_rows, ini_guess_position, dtype=float)
+    # center row
+    trace[center_row] = _calculate_fiber_barycenter_position(
+        image_data=image_data,
+        row=center_row,
+        guess_position=ini_guess_position,
+        max_shift=max_shift,
+        cdisp_half_width=cdisp_half_width,
+        threshold_fraction=threshold_fraction,
+    )
+    # upward (from center row to top row)
+    for i in range(center_row - 1, -1, -1):
+        trace[i] = _calculate_fiber_barycenter_position(
+            image_data=image_data,
+            row=i,
+            guess_position=trace[i + 1],
+            max_shift=max_shift,
+            cdisp_half_width=cdisp_half_width,
+            threshold_fraction=threshold_fraction,
+        )
+    # downward (from center row to bottom row)
+    for i in range(center_row + 1, n_rows, 1):
+        trace[i] = _calculate_fiber_barycenter_position(
+            image_data=image_data,
+            row=i,
+            guess_position=trace[i - 1],
+            max_shift=max_shift,
+            cdisp_half_width=cdisp_half_width,
+            threshold_fraction=threshold_fraction,
+        )
+    return trace
+
+
+@jit(nopython=True, parallel=True)
+def _trace_fibers_barycenter_positions(
+        image_data: NDArray[np.floating],
+        n_fibers: int,
+        fiber_approx_positions: NDArray[np.integer],
+        tracing_max_shift: float = 1.,
+        tracing_cdisp_half_width: int = 3,
+        tracing_threshold_fraction: float = 0.1) -> NDArray[np.floating]:
+    n_rows = image_data.shape[0]
+    traces = np.full((n_fibers, n_rows), -1., dtype=float)
+    for i in prange(n_fibers):
+        traces[i, :] = _trace_fiber_barycenter_positions(
+            image_data=image_data,
+            ini_guess_position=fiber_approx_positions[i],
+            max_shift=tracing_max_shift,
+            cdisp_half_width=tracing_cdisp_half_width,
+            threshold_fraction=tracing_threshold_fraction)
+    return traces
+
+
+def _legendre_fitting_barycenter_trace(barycenter_trace, deg=10):
+    n_rows = len(barycenter_trace)
+    mask = barycenter_trace >= 0.
+    data_x = np.arange(n_rows)[mask]
+    data_y = barycenter_trace[mask]
+    model = Legendre.fit(
+        data_x, data_y, deg=deg, domain=[np.nanmin(data_x), np.nanmax(data_x)])
+    return model
