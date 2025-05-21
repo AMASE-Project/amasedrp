@@ -116,7 +116,10 @@ def preprocess_image(
         print(f"Master pixel flat frame loaded from {master_pixflat_frame}")
     else:
         mpflat_img = Image(data=np.ones_like(in_img.data), header=Header())
-        mpflat_img.data *= np.max([np.nanmax(mbias_img.data)*100., 10000.])
+        peak = np.max([np.nanmax(mbias_img.data)*100., 10000.])
+        peak *= 1. + np.random.uniform(0, 0.05, size=mpflat_img.data.shape)
+        mpflat_img.data *= peak
+        del peak
         mpflat_img.header['EXPTIME'] = in_img.header['EXPTIME']
         mpflat_img.header['TRIMSEC'] = in_img.header['TRIMSEC']
         print("No master pixel flat frame provided or file not found.")
