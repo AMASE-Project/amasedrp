@@ -221,8 +221,9 @@ class Image():
 
     def identifyFibers(
             self,
+            disp_band_central_row: Optional[int] = None,
             disp_band_half_width: int = 50,
-            threshold_fraction: float = 0.5) -> tuple:
+            threshold_fraction: float = 0.1) -> tuple:
         """Fiber identification and tracing are both based on the continuum
         lamp image (#TODO: check this).
         The approach largely follows the methodology used in the DESI pipeline.
@@ -244,7 +245,7 @@ class Image():
         threshold_fraction : float, optional
             Only peaks with a height greater than this fraction of the maximum
             intensity of the profile are considered.
-            By default 0.5.
+            By default 0.1.
 
         Returns
         -------
@@ -254,13 +255,17 @@ class Image():
             The approximate x-axis positions of the fibers.
             This is a 1D array of length n_fibers.
         """
-        center_row = self.dimensions[0] // 2
+        if disp_band_central_row is not None:
+            center_row = disp_band_central_row
+        else:
+            center_row = self.dimensions[0] // 2
         start_row = int(center_row - disp_band_half_width)
         end_row = int(center_row + disp_band_half_width)
         band = self.data[start_row:end_row, :]
         profile = np.nanmedian(band, axis=0)
-        peaks, _ = find_peaks(
-            profile, height=threshold_fraction*np.nanmax(profile))
+        threshold_height = threshold_fraction * np.ptp(profile)
+        threshold_height += np.nanmin(profile)
+        peaks, _ = find_peaks(profile, height=threshold_height)
         n_fibers = len(peaks)
         fiber_approx_positions = peaks
         return n_fibers, fiber_approx_positions
