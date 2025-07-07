@@ -57,8 +57,8 @@ class Image():
             type=self.type
         )
 
-    def readFitsData(self, filename: str) -> None:
-        """Read the image data from a FITS file.
+    def readFitsFile(self, filename: str, overwrite: bool = True) -> None:
+        """Read the image from a FITS file.
 
         Parameters
         ----------
@@ -71,12 +71,13 @@ class Image():
             header = hdul[0].header
         # update the class attributes
         self.filename = filename
-        self.data = data
-        self.header = header
-        self.type = header['IMGTYPE']  # TODO: We should discuss what keyword to use to describe the image type (i.e., bias, dark, flat, science).  # noqa
+        if overwrite:
+            self.data = data
+            self.header = header
+            # self.type = header['IMGTYPE']  # TODO: We should discuss what keyword to use to describe the image type (i.e., bias, dark, flat, science).  # noqa
 
-    def writeFitsData(self, filename: str) -> None:
-        """Write the image data to a FITS file.
+    def writeFitsFile(self, filename: str) -> None:
+        """Write the image to a FITS file.
 
         Parameters
         ----------
