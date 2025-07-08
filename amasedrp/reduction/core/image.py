@@ -272,8 +272,9 @@ class Image():
 
     def traceFibers(
             self,
+            idensity_fibers_disp_band_central_row: Optional[int] = None,
             idensity_fibers_disp_band_half_width: int = 50,
-            idensity_fibers_threshold_fraction: float = 0.5,
+            idensity_fibers_threshold_fraction: float = 0.1,
             tracing_max_shift: float = 1.,
             tracing_cdisp_half_width: int = 3,
             tracing_threshold_fraction: float = 0.1,
@@ -284,6 +285,7 @@ class Image():
         """
         # identify the fibers and estimate their approximate positions
         n_fibers, fiber_approx_positions = self.identifyFibers(
+            disp_band_central_row=idensity_fibers_disp_band_central_row,
             disp_band_half_width=idensity_fibers_disp_band_half_width,
             threshold_fraction=idensity_fibers_threshold_fraction)
         # trace the barycenter positions of all fibers
