@@ -413,8 +413,6 @@ def _legendre_fitting_barycenter_trace(barycenter_trace, deg=10):
     mask = barycenter_trace >= 0.
     data_x = np.arange(n_rows)[mask]
     data_y = barycenter_trace[mask]
-    print(barycenter_trace)
-    print(data_x, data_y)
     model = Legendre.fit(
         data_x, data_y, deg=deg, domain=[np.nanmin(data_x), np.nanmax(data_x)])
     return model
