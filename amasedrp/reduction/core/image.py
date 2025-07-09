@@ -221,7 +221,7 @@ class Image():
 
     def identifyFibers(
             self,
-            disp_band_central_row: Optional[int] = None,
+            disp_band_center_row: Optional[int] = None,
             disp_band_half_width: int = 50,
             threshold_fraction: float = 0.1) -> tuple:
         """Fiber identification and tracing are both based on the continuum
@@ -239,8 +239,10 @@ class Image():
 
         Parameters
         ----------
+        disp_band_center_row : int, optional
+            The center row of the dispersion band used for fiber identification.
         disp_band_half_width : int, optional
-            Half width of the central band for fiber identification.
+            Half width of the dispersion band for fiber identification.
             By default 50.
         threshold_fraction : float, optional
             Only peaks with a height greater than this fraction of the maximum
@@ -251,12 +253,12 @@ class Image():
         -------
         n_fibers : int
             The number of fibers identified in the image.
-        fiber_approx_positions : NDArray[np.integer]
+        fibers_approx_position : NDArray[np.integer]
             The approximate x-axis positions of the fibers.
             This is a 1D array of length n_fibers.
         """
-        if disp_band_central_row is not None:
-            center_row = disp_band_central_row
+        if disp_band_center_row is not None:
+            center_row = disp_band_center_row
         else:
             center_row = self.dimensions[0] // 2
         start_row = int(center_row - disp_band_half_width)
@@ -267,14 +269,18 @@ class Image():
         threshold_height += np.nanmin(profile)
         peaks, _ = find_peaks(profile, height=threshold_height)
         n_fibers = len(peaks)
-        fiber_approx_positions = peaks
-        return n_fibers, fiber_approx_positions
+        identified_fibers_approx_position = peaks
+        identified_fibers_row = center_row
+        return (
+            n_fibers,
+            identified_fibers_row,
+            identified_fibers_approx_position,
+        )
 
     def traceFibers(
             self,
-            idensity_fibers_disp_band_central_row: Optional[int] = None,
-            idensity_fibers_disp_band_half_width: int = 50,
-            idensity_fibers_threshold_fraction: float = 0.1,
+            identified_fibers_row: int,
+            identified_fibers_approx_position: NDArray[np.integer],
             tracing_max_shift: float = 1.,
             tracing_cdisp_half_width: int = 3,
             tracing_threshold_fraction: float = 0.1,
@@ -283,16 +289,15 @@ class Image():
         """
         # TODO: add more details about the fiber tracing process.
         """
-        # identify the fibers and estimate their approximate positions
-        n_fibers, fiber_approx_positions = self.identifyFibers(
-            disp_band_central_row=idensity_fibers_disp_band_central_row,
-            disp_band_half_width=idensity_fibers_disp_band_half_width,
-            threshold_fraction=idensity_fibers_threshold_fraction)
+        # fibers identification
+        n_fibers = len(identified_fibers_approx_position)
+        fibers_approx_position = identified_fibers_approx_position
         # trace the barycenter positions of all fibers
         barycenter_traces = _trace_fibers_barycenter_positions(
             image_data=self.data,
             n_fibers=n_fibers,
-            fiber_approx_positions=fiber_approx_positions,
+            fibers_ini_row=identified_fibers_row,
+            fibers_approx_position=fibers_approx_position,
             tracing_max_shift=tracing_max_shift,
             tracing_cdisp_half_width=tracing_cdisp_half_width,
             tracing_threshold_fraction=tracing_threshold_fraction)
@@ -342,24 +347,24 @@ def _calculate_fiber_barycenter_position(
 @jit(nopython=True)
 def _trace_fiber_barycenter_positions(
         image_data: NDArray[np.floating],
+        ini_row: int,
         ini_guess_position: float,
         max_shift: float = 1.,
         cdisp_half_width: int = 3,
         threshold_fraction: float = 0.1) -> list:
     n_rows = image_data.shape[0]
-    center_row = n_rows // 2
     trace = np.full(n_rows, ini_guess_position, dtype=float)
-    # center row
-    trace[center_row] = _calculate_fiber_barycenter_position(
+    # initial row
+    trace[ini_row] = _calculate_fiber_barycenter_position(
         image_data=image_data,
-        row=center_row,
+        row=ini_row,
         guess_position=ini_guess_position,
         max_shift=max_shift,
         cdisp_half_width=cdisp_half_width,
         threshold_fraction=threshold_fraction,
     )
-    # upward (from center row to top row)
-    for i in range(center_row - 1, -1, -1):
+    # upward (from initial row to top row)
+    for i in range(ini_row - 1, -1, -1):
         trace[i] = _calculate_fiber_barycenter_position(
             image_data=image_data,
             row=i,
@@ -368,8 +373,8 @@ def _trace_fiber_barycenter_positions(
             cdisp_half_width=cdisp_half_width,
             threshold_fraction=threshold_fraction,
         )
-    # downward (from center row to bottom row)
-    for i in range(center_row + 1, n_rows, 1):
+    # downward (from initial row to bottom row)
+    for i in range(ini_row + 1, n_rows, 1):
         trace[i] = _calculate_fiber_barycenter_position(
             image_data=image_data,
             row=i,
@@ -385,7 +390,8 @@ def _trace_fiber_barycenter_positions(
 def _trace_fibers_barycenter_positions(
         image_data: NDArray[np.floating],
         n_fibers: int,
-        fiber_approx_positions: NDArray[np.integer],
+        fibers_ini_row: int,
+        fibers_approx_position: NDArray[np.integer],
         tracing_max_shift: float = 1.,
         tracing_cdisp_half_width: int = 3,
         tracing_threshold_fraction: float = 0.1) -> NDArray[np.floating]:
@@ -394,7 +400,8 @@ def _trace_fibers_barycenter_positions(
     for i in prange(n_fibers):
         traces[i, :] = _trace_fiber_barycenter_positions(
             image_data=image_data,
-            ini_guess_position=fiber_approx_positions[i],
+            ini_row=fibers_ini_row,
+            ini_guess_position=fibers_approx_position[i],
             max_shift=tracing_max_shift,
             cdisp_half_width=tracing_cdisp_half_width,
             threshold_fraction=tracing_threshold_fraction)
@@ -406,6 +413,8 @@ def _legendre_fitting_barycenter_trace(barycenter_trace, deg=10):
     mask = barycenter_trace >= 0.
     data_x = np.arange(n_rows)[mask]
     data_y = barycenter_trace[mask]
+    print(barycenter_trace)
+    print(data_x, data_y)
     model = Legendre.fit(
         data_x, data_y, deg=deg, domain=[np.nanmin(data_x), np.nanmax(data_x)])
     return model
