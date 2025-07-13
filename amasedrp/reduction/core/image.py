@@ -308,9 +308,15 @@ class Image():
             trace['FiberID'] = f'{idx:03d}'
             trace['Barycenter'] = barycenter_traces[idx]
             if legendre_fitting:
-                trace['LegendreFittingModel'] \
-                    = _legendre_fitting_barycenter_trace(
-                        trace['Barycenter'], deg=legendre_fitting_deg)
+                try:
+                    trace['LegendreFittingModel'] \
+                        = _legendre_fitting_barycenter_trace(
+                            trace['Barycenter'], deg=legendre_fitting_deg)
+                except ValueError:
+                    trace['LegendreFittingModel'] = None
+                    print(
+                        f"Warning: Legendre fitting failed for fiber {idx:03d}."  # NOTE: Optimize this part!!! noqa: E501 
+                    )
             traces.append(trace)
         traces = np.array(traces)
         return traces
@@ -349,7 +355,7 @@ def _trace_fiber_barycenter_positions(
         image_data: NDArray[np.floating],
         ini_row: int,
         ini_guess_position: float,
-        max_shift: float = 1.,
+        max_shift: float = 1.,  # NOTE: max_shift = 1. may be too small for some cases??  # note: E501
         cdisp_half_width: int = 3,
         threshold_fraction: float = 0.1) -> list:
     n_rows = image_data.shape[0]
