@@ -41,7 +41,7 @@ class Fibers():
         if disp_band_center_row is not None:
             center_row = disp_band_center_row
         else:
-            center_row = self.fflat_img_data.dimensions[0] // 2
+            center_row = self.fflat_img_data.shape[0] // 2
         start_row = int(center_row - disp_band_half_width)
         end_row = int(center_row + disp_band_half_width)
         band = self.fflat_img_data[start_row:end_row, :]
@@ -82,7 +82,7 @@ class Fibers():
         )
         self.cross_disp_profile_xs = profile_xs
         self.cross_disp_profile = profile
-        self.disp_band_center_row = disp_band_center_row
+        self.disp_band_center_row = center_row
 
     def identifyFibers(
         self,
@@ -214,7 +214,7 @@ def _trace_fiber_barycenter_positions(
         cdisp_half_width: int = 3,
         threshold_fraction: float = 0.1) -> list:
     n_rows = image_data.shape[0]
-    trace = np.full(n_rows, ini_guess_position, dtype=float)
+    trace = np.full(n_rows, -1., dtype=float)
     # initial row
     trace[ini_row] = _calculate_fiber_barycenter_position(
         image_data=image_data,
@@ -234,6 +234,9 @@ def _trace_fiber_barycenter_positions(
             cdisp_half_width=cdisp_half_width,
             threshold_fraction=threshold_fraction,
         )
+        # stop tracing if no valid position found
+        if trace[i] < 0.:
+            break
     # downward (from initial row to bottom row)
     for i in range(ini_row + 1, n_rows, 1):
         trace[i] = _calculate_fiber_barycenter_position(
@@ -244,6 +247,9 @@ def _trace_fiber_barycenter_positions(
             cdisp_half_width=cdisp_half_width,
             threshold_fraction=threshold_fraction,
         )
+        # stop tracing if no valid position found
+        if trace[i] < 0.:
+            break
     return trace
 
 
