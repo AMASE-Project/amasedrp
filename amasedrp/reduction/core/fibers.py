@@ -78,7 +78,7 @@ class Fibers():
         self.blocks_edge = blocks_edge
         self.blocks_center = np.array(
             [np.nanmean(blocks_edge[i:i+2])
-             for i in range(len(blocks_edge) - 1)]
+             for i in range(self.n_blocks)]
         )
         self.cross_disp_profile_xs = profile_xs
         self.cross_disp_profile = profile
@@ -127,6 +127,19 @@ class Fibers():
         # store the results
         self.n_fibers = len(peak_xs)
         self.approx_xs = peak_xs
+        # store the results
+        self.fibers = []
+        for i in range(self.n_fibers):
+            fiber = {}
+            fiber['FiberID'] = f'{i:03d}'
+            fiber['ApproxPosition'] = self.approx_xs[i]
+            for j in range(self.n_blocks):
+                if (self.blocks_edge[j] <= self.approx_xs[i] <
+                        self.blocks_edge[j + 1]):
+                    fiber['BlockID'] = f'{j:03d}'
+                    break
+            self.fibers.append(fiber)
+        self.fibers = np.array(self.fibers)
 
     def traceFibers(
         self,
@@ -156,25 +169,21 @@ class Fibers():
             tracing_max_shift=tracing_max_shift,
             tracing_cdisp_half_width=tracing_cdisp_half_width,
             tracing_threshold_fraction=tracing_threshold_fraction)
-        # fiber traces
-        traces = []
-        for idx in range(self.n_fibers):
-            trace = {}
-            trace['FiberID'] = f'{idx:03d}'
-            trace['Barycenter'] = barycenter_traces[idx]
-            if legendre_fitting:
+        for i in range(self.n_fibers):
+            self.fibers[i]['BarycenterTrace'] = barycenter_traces[i, :]
+        # if legendre fitting is requested, perform it for each fiber trace
+        if legendre_fitting:
+            for i in range(self.n_fibers):
                 try:
-                    trace['LegendreFittingModel'] \
-                        = _legendre_fitting_barycenter_trace(
-                            trace['Barycenter'], deg=legendre_fitting_deg)
+                    self.fibers[i]['LegendreFittingModel'] = \
+                        _legendre_fitting_barycenter_trace(
+                            barycenter_trace=barycenter_traces[i, :],
+                            deg=legendre_fitting_deg)
                 except ValueError:
-                    trace['LegendreFittingModel'] = None
+                    self.fibers[i]['LegendreFittingModel'] = None
                     print(
-                        f"Warning: Legendre fitting failed for fiber {idx:03d}."  # noqa: E501 NOTE: Optimize this part!!!
+                        f"Warning: Legendre fitting failed for fiber {i:03d}."  # noqa: E501 NOTE: Optimize this part!!!
                     )
-            traces.append(trace)
-        # store the results
-        self.traces = np.array(traces)
 
 
 @jit(nopython=True)
@@ -188,18 +197,24 @@ def _calculate_fiber_barycenter_position(
     barycenter = -1.
     if guess_position >= 0:
         n_cols = image_data.shape[1]
-        col_start = guess_position - cdisp_half_width
-        col_end = guess_position + cdisp_half_width + 1
-        col_start = round(max(col_start, 0))
-        col_end = round(min(col_end, n_cols - 1))
+        col_center = round(guess_position)
+        col_start = col_center - cdisp_half_width
+        col_end = col_center + cdisp_half_width + 1
+        col_start = int(max(col_start, 0))
+        col_end = int(min(col_end, n_cols - 1))
         profile = image_data[row, col_start:col_end]
         if np.nansum(profile) > (
             threshold_fraction * np.nanmax(image_data)
         ):
             col_range = np.arange(col_start, col_end, 1)
-            barycenter = (
-                np.nansum(profile * col_range) / np.nansum(profile)
-            )
+            # # NOTE: the result calculated below is largely affected by initial guess  # noqa: E501
+            # barycenter = (
+            #     np.nansum(profile * col_range) / np.nansum(profile)
+            # )
+            # temporary solution:
+            cond = profile >= np.nanmedian(profile)
+            barycenter = np.nanmedian(col_range[cond])
+            # check if the barycenter is within the allowed shift range
             if np.abs(barycenter - guess_position) > max_shift:
                 barycenter = -1.
     return barycenter
