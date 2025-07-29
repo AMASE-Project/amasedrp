@@ -175,8 +175,10 @@ class Fibers():
             for i in range(self.n_fibers):
                 self.fibers[i]['BarycenterTrace'] \
                     = self.barycenter_traces[i, :]
-        # if legendre fitting is requested, perform it for each fiber trace
-        if legendre_fitting:
+        # legendre fitting of barycenter traces
+        cond = legendre_fitting
+        cond = cond and ('LegendreFittingModel' not in self.fibers[0])
+        if cond:
             for i in range(self.n_fibers):
                 self.fibers[i]['LegendreFittingModel'] \
                     = _legendre_fitting_barycenter_trace(
@@ -303,7 +305,7 @@ def _legendre_fitting_barycenter_trace(barycenter_trace, deg=10):
     if np.sum(mask) >= deg + 1:
         data_x = np.arange(n_rows)[mask]
         data_y = barycenter_trace[mask]
-        domain = np.array[np.nanmin(data_x), np.nanmax(data_x)]
+        domain = np.array([np.nanmin(data_x), np.nanmax(data_x)])
         model = Legendre.fit(data_x, data_y, deg=deg, domain=domain)
     else:
         coeffs = np.zeros(deg)
