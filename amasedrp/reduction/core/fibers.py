@@ -160,44 +160,37 @@ class Fibers():
                 disp_band_half_width=identify_disp_band_half_width,
             )
         # fiber tracing
-        # trace the barycenter positions of all fibers
-        barycenter_traces = _trace_fibers_barycenter_positions(
-            image_data=self.fflat_img_data,
-            n_fibers=self.n_fibers,
-            fibers_ini_row=self.disp_band_center_row,
-            fibers_approx_position=self.approx_xs,
-            tracing_max_shift=tracing_max_shift,
-            tracing_cdisp_half_width=tracing_cdisp_half_width,
-            tracing_threshold_fraction=tracing_threshold_fraction)
-        for i in range(self.n_fibers):
-            self.fibers[i]['BarycenterTrace'] = barycenter_traces[i, :]
+        if hasattr(self, 'barycenter_traces'):
+            pass
+        else:
+            # trace the barycenter positions of all fibers
+            self.barycenter_traces = _trace_fibers_barycenter_positions(
+                image_data=self.fflat_img_data,
+                n_fibers=self.n_fibers,
+                fibers_ini_row=self.disp_band_center_row,
+                fibers_approx_position=self.approx_xs,
+                tracing_max_shift=tracing_max_shift,
+                tracing_cdisp_half_width=tracing_cdisp_half_width,
+                tracing_threshold_fraction=tracing_threshold_fraction)
+            for i in range(self.n_fibers):
+                self.fibers[i]['BarycenterTrace'] \
+                    = self.barycenter_traces[i, :]
         # if legendre fitting is requested, perform it for each fiber trace
         if legendre_fitting:
             for i in range(self.n_fibers):
-                try:
-                    self.fibers[i]['LegendreFittingModel'] = \
-                        _legendre_fitting_barycenter_trace(
-                            barycenter_trace=barycenter_traces[i, :],
-                            deg=legendre_fitting_deg)
-                except ValueError:
-                    self.fibers[i]['LegendreFittingModel'] = None
-                    print(
-                        f"Warning: Legendre fitting failed for fiber {i:03d}."  # noqa: E501 NOTE: Optimize this part!!!
+                self.fibers[i]['LegendreFittingModel'] \
+                    = _legendre_fitting_barycenter_trace(
+                        barycenter_trace=self.barycenter_traces[i, :],
+                        deg=legendre_fitting_deg
                     )
 
 
 @jit(nopython=True)
 def _calculate_barycenter(col_range, profile):
-
-    # NOTE: the result calculated below is largely affected by initial guess  # noqa: E501
-    # barycenter = (
-    #     np.nansum(profile * col_range) / np.nansum(profile)
-    # )
-
-    # temporary solution:
+    # only use pixels with "high enough" values to calculate barycenter,
+    # avoid the influence of noisy pixels
     cond = profile >= np.nanmedian(profile)
     if np.sum(cond):
-        # barycenter = np.nanmedian(col_range[cond])
         barycenter = np.nansum(
             profile[cond] * col_range[cond]
         ) / np.nansum(profile[cond])
@@ -307,8 +300,14 @@ def _trace_fibers_barycenter_positions(
 def _legendre_fitting_barycenter_trace(barycenter_trace, deg=10):
     n_rows = len(barycenter_trace)
     mask = barycenter_trace >= 0.
-    data_x = np.arange(n_rows)[mask]
-    data_y = barycenter_trace[mask]
-    model = Legendre.fit(
-        data_x, data_y, deg=deg, domain=[np.nanmin(data_x), np.nanmax(data_x)])
+    if np.sum(mask) >= deg + 1:
+        data_x = np.arange(n_rows)[mask]
+        data_y = barycenter_trace[mask]
+        domain = np.array[np.nanmin(data_x), np.nanmax(data_x)]
+        model = Legendre.fit(data_x, data_y, deg=deg, domain=domain)
+    else:
+        coeffs = np.zeros(deg)
+        coeffs[0] = -1.
+        domian = np.array([0., 0.])
+        model = np.polynomial.Legendre(coeffs, domain=domian)
     return model
