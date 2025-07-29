@@ -187,6 +187,26 @@ class Fibers():
 
 
 @jit(nopython=True)
+def _calculate_barycenter(col_range, profile):
+
+    # NOTE: the result calculated below is largely affected by initial guess  # noqa: E501
+    # barycenter = (
+    #     np.nansum(profile * col_range) / np.nansum(profile)
+    # )
+
+    # temporary solution:
+    cond = profile >= np.nanmedian(profile)
+    if np.sum(cond):
+        # barycenter = np.nanmedian(col_range[cond])
+        barycenter = np.nansum(
+            profile[cond] * col_range[cond]
+        ) / np.nansum(profile[cond])
+        return barycenter
+    else:
+        return -1.
+
+
+@jit(nopython=True)
 def _calculate_fiber_barycenter_position(
         image_data: NDArray[np.floating],
         row: int,
@@ -207,13 +227,7 @@ def _calculate_fiber_barycenter_position(
             threshold_fraction * np.nanmax(image_data)
         ):
             col_range = np.arange(col_start, col_end, 1)
-            # # NOTE: the result calculated below is largely affected by initial guess  # noqa: E501
-            # barycenter = (
-            #     np.nansum(profile * col_range) / np.nansum(profile)
-            # )
-            # temporary solution:
-            cond = profile >= np.nanmedian(profile)
-            barycenter = np.nanmedian(col_range[cond])
+            barycenter = _calculate_barycenter(col_range, profile=profile)
             # check if the barycenter is within the allowed shift range
             if np.abs(barycenter - guess_position) > max_shift:
                 barycenter = -1.
