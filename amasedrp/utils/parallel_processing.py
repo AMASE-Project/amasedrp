@@ -8,6 +8,7 @@
 '''
 
 
+import os
 from joblib import parallel_backend
 from joblib import Parallel, delayed
 
@@ -22,6 +23,8 @@ def run(function, inputs, parallel=True, n_jobs=-1, backend='loky'):
     # outputs = [output_0, output_1, ...]
     """
     if parallel:
+        if n_jobs == -1:
+            n_jobs = min(len(inputs), os.cpu_count())
         with parallel_backend(backend=backend, n_jobs=n_jobs):
             try:
                 outputs = Parallel()(
