@@ -10,7 +10,31 @@
 import numpy as np
 from itertools import combinations
 from itertools import product
+from scipy.signal import find_peaks
 from ...utils.parallel_processing import run as prun
+
+
+def detect_lines(spectrum, n_strongest_lines=20, n_all_lines=100):
+    """
+    Detect all and strongest lines in the spectrum.
+    """
+    peaks, _ = find_peaks(spectrum, height=np.nanmedian(spectrum))
+    ys = np.arange(len(spectrum))[peaks]
+    heights = spectrum[peaks]
+    # sort by height
+    sorted_indices = np.argsort(heights)[::-1]
+    ys = ys[sorted_indices]
+    heights = heights[sorted_indices]
+    del sorted_indices
+    # only keep the 'n_all_lines' strongest lines
+    n_all_lines = min(n_all_lines, len(ys))
+    all_peak_ys = ys[:n_all_lines]
+    all_peak_heights = heights[:n_all_lines]
+    # only keep the 'n_strongest_lines' strongest lines
+    n_strongest_lines = min(n_strongest_lines, len(ys))
+    strong_peak_ys = ys[:n_strongest_lines]
+    strong_peak_heights = heights[:n_strongest_lines]
+    return strong_peak_ys, strong_peak_heights, all_peak_ys, all_peak_heights
 
 
 def calculate_fitting_score(poss_poly, known_wls, all_peak_ys):
@@ -34,7 +58,7 @@ def fitting(
         ys: list[float],
         wls: list[float],
         known_wls: list[float],
-        all_peaks_detected_ys: list[float],
+        all_peak_ys: list[float],
         deg: int = 3,
         poly_form=np.polynomial.Legendre,
 ):
@@ -46,7 +70,7 @@ def fitting(
         poss_poly = poly_form(coeffs)
         # calculate a "score" for the fitting
         score = calculate_fitting_score(
-            poss_poly, known_wls, all_peaks_detected_ys)
+            poss_poly, known_wls, all_peak_ys)
         output = np.append(coeffs, score)
     except:  # noqa: E722
         output = np.append(np.full(deg+1, np.nan, dtype=float), np.nan)
@@ -57,8 +81,8 @@ def wavelength_calibration(
         poss_wls: list[float],
         poss_ys: list[float],
         known_wls: list[float],
-        all_peaks_detected_ys: list[float],
-        deg: int = 3,
+        all_peak_ys: list[float],
+        min_deg: int = 3,
         poly_form=np.polynomial.Legendre,
         full_search: bool = True,
         parallel: bool = True,
@@ -72,9 +96,17 @@ def wavelength_calibration(
     NOTE: deg + 1 <= len(poss_wls) <= len(poss_ys)
     NOTE: lines with poss_wls should be included in those with poss_ys, AMAP !!
     known_wls: the known wavelengths of some ("strong enough") lines
-    all_peaks_detected_ys: the y coordinates of all detected peaks
+    all_peak_ys: the y coordinates of all detected peaks
     of the uncalibrated spectrum
+    If full_search is True, then the return degree of the polynomial
+    can be larger than "deg".
     """
+    # sort
+    poss_wls = np.sort(poss_wls)
+    poss_ys = np.sort(poss_ys)
+    known_wls = np.sort(known_wls)
+    all_peak_ys = np.sort(all_peak_ys)
+    deg = min_deg  # the minimum degree
     # full search: try to find the best solution. Could take a while.
     if full_search:
         inputs = []
@@ -85,7 +117,7 @@ def wavelength_calibration(
             # all possible pairs of combinations
             inputs += list(product(
                 ys_poss_comb, wls_poss_comb,
-                [known_wls], [all_peaks_detected_ys],
+                [known_wls], [all_peak_ys],
                 [int(n-1)], [poly_form]
             ))
     # the initial guess is good enough:
@@ -100,7 +132,7 @@ def wavelength_calibration(
         # all possible pairs of combinations
         inputs = list(product(
             ys_poss_comb, wls_poss_comb,
-            [known_wls], [all_peaks_detected_ys],
+            [known_wls], [all_peak_ys],
             [deg], [poly_form]
         ))
     # fit for all possible pairs of combinations
