@@ -131,6 +131,9 @@ cython_debug/
 # vim
 *.swp
 
+# Visual Studio Code
+.vscode/
+
 # Temporary files/directories during AMASE pipeline development
 test*
 test*/
