@@ -11,6 +11,7 @@ import numpy as np
 from itertools import combinations
 from itertools import product
 from scipy.signal import find_peaks
+from scipy.ndimage import gaussian_filter1d
 from ...utils.parallel_processing import run as prun
 
 
@@ -18,6 +19,8 @@ def detect_lines(spectrum, n_strongest_lines=20, n_all_lines=100):
     """
     Detect all and strongest lines in the spectrum.
     """
+    # smooth the spectrum & find peaks
+    spectrum = gaussian_filter1d(spectrum, sigma=1)
     peaks, _ = find_peaks(spectrum, height=np.nanmedian(spectrum))
     ys = np.arange(len(spectrum))[peaks]
     heights = spectrum[peaks]
