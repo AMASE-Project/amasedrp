@@ -12,6 +12,7 @@ from itertools import combinations
 from itertools import product
 from scipy.signal import find_peaks
 from scipy.ndimage import gaussian_filter1d
+from scipy.optimize import minimize
 from ...utils.parallel_processing import run as prun
 
 
@@ -80,7 +81,7 @@ def fitting(
     return output
 
 
-def wavelength_calibration(
+def find_poss_wavelength_solution(
         poss_wls: list[float],
         poss_ys: list[float],
         known_wls: list[float],
@@ -96,13 +97,15 @@ def wavelength_calibration(
     poss_wls: the most probable wavelengths to be observed
     (e.g., for the strongest lines)
     poss_ys: the possible y coordinates of the peaks for the strongest lines
-    NOTE: deg + 1 <= len(poss_wls) <= len(poss_ys)
-    NOTE: lines with poss_wls should be included in those with poss_ys, AMAP !!
     known_wls: the known wavelengths of some ("strong enough") lines
     all_peak_ys: the y coordinates of all detected peaks
     of the uncalibrated spectrum
     If full_search is True, then the return degree of the polynomial
     can be larger than "deg".
+    # NOTE: deg + 1 <= len(poss_wls) <= len(poss_ys)
+    # NOTE:
+    # (1) known_wls should be included in all_peak_ys
+    # (2) poss_wls should be included in poss_ys
     """
     # sort
     poss_wls = np.sort(poss_wls)
@@ -149,4 +152,118 @@ def wavelength_calibration(
     score = np.nanmin(scores)
     poss_coeffs = outputs[np.nanargmin(scores)][:-1]
     poss_poly = poly_form(poss_coeffs)
+    return poss_poly, score
+
+
+def match_lines_refine_poss_solution(
+        guess_poss_poly,
+        known_wls, all_peak_ys,
+):
+    """
+    Refine the possible solution with the known wavelengths and
+    all detected peaks.
+    Match the known wavelengths to the detected peaks
+    and calculate the for the fitting.
+    """
+    matched_ys = np.full(len(known_wls), np.nan, dtype=float)
+    matched_residuals = np.full(len(known_wls), np.nan, dtype=float)
+    all_peak_wls = guess_poss_poly(all_peak_ys)
+    # match the known wavelengths to the detected peaks
+    for i in range(len(known_wls)):
+        # find the nearest peak
+        j = np.argmin(np.abs(all_peak_wls - known_wls[i]))
+        # update the matched y coordinate
+        matched_ys[i] = all_peak_ys[j]
+        matched_residuals[i] = np.abs(all_peak_wls[j] - known_wls[i])
+    print(f"Matched residuals: {matched_residuals}")
+    # re-fit the solution with the matched y coordinates
+    output = fitting(
+        ys=matched_ys, wls=known_wls,
+        known_wls=known_wls, all_peak_ys=all_peak_ys,
+        deg=guess_poss_poly.degree(), poly_form=type(guess_poss_poly)
+    )
+    score = output[-1]
+    coeffs = output[:-1]
+    poss_poly = type(guess_poss_poly)(coeffs)
+    return poss_poly, score
+
+
+def lstsq_refine_poss_solution(
+        guess_poss_poly,
+        known_wls, all_peak_ys,
+):
+    """
+    Refine the possible solution with the known wavelengths and
+    all detected peaks using least squares fitting.
+    (i.e., poss_poly = a * guess_poss_poly + b
+    where a and b are the coefficients to be determined.)
+    """
+    def objective(params):
+        a, b = params
+
+        # define the new polynomial as a * guess_poss_poly + b
+        def poss_poly(x):
+            return a * guess_poss_poly(x) + b
+
+        # calculate the fitting score
+        return calculate_fitting_score(poss_poly, known_wls, all_peak_ys)
+
+    # initial guess for a and b
+    initial_guess = [1.0, 0.0]
+
+    # minimize the objective function
+    result = minimize(objective, initial_guess, method='L-BFGS-B')
+    # extract the optimized parameters
+    a_opt, b_opt = result.x
+
+    # optimized result
+    poss_poly = a_opt * guess_poss_poly + b_opt
+    score = calculate_fitting_score(poss_poly, known_wls, all_peak_ys)
+    return poss_poly, score
+
+
+def refine_poss_solution(
+        guess_poss_poly,
+        known_wls, all_peak_ys,
+):
+    return lstsq_refine_poss_solution(
+        guess_poss_poly=guess_poss_poly,
+        known_wls=known_wls,
+        all_peak_ys=all_peak_ys
+    )
+
+
+def wavelength_calibration(
+        poss_wls: list[float],
+        poss_ys: list[float],
+        known_wls: list[float],
+        all_peak_ys: list[float],
+        min_deg: int = 3,
+        poly_form=np.polynomial.Legendre,
+        full_search: bool = True,
+        parallel: bool = True,
+        n_jobs: int = -1,
+        backend: str = 'loky',
+        guess_poss_poly=None,
+        auto_refine: bool = True,
+):
+    if guess_poss_poly is None:
+        poss_poly, score = find_poss_wavelength_solution(
+            poss_wls, poss_ys, known_wls, all_peak_ys,
+            min_deg=min_deg, poly_form=poly_form,
+            full_search=full_search, parallel=parallel,
+            n_jobs=n_jobs, backend=backend,
+        )
+    else:
+        poss_poly, score = refine_poss_solution(
+            guess_poss_poly, known_wls, all_peak_ys,
+        )
+    if auto_refine:
+        while True:
+            new_poss_poly, new_score = refine_poss_solution(
+                poss_poly, known_wls, all_peak_ys,
+            )
+            if np.isclose(new_score, score, atol=1e-5):
+                break
+            poss_poly, score = new_poss_poly, new_score
     return poss_poly, score
