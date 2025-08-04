@@ -75,9 +75,11 @@ def fitting(
         # calculate a "score" for the fitting
         score = calculate_fitting_score(
             poss_poly, known_wls, all_peak_ys)
-        output = np.append(coeffs, score)
     except:  # noqa: E722
-        output = np.append(np.full(deg+1, np.nan, dtype=float), np.nan)
+        coeffs = np.full(deg+1, 0., dtype=float)
+        coeffs[0] = -1.
+        score = -1.
+    output = np.append(coeffs, score)
     return output
 
 
@@ -142,16 +144,22 @@ def find_poss_wavelength_solution(
             [deg], [poly_form]
         ))
     # fit for all possible pairs of combinations
-    outputs = prun(
-        function=fitting,
-        inputs=inputs,
-        parallel=parallel, n_jobs=n_jobs, backend=backend,
-    )
-    # find the best coefficients
-    scores = [outputs[i][-1] for i in range(len(outputs))]
-    score = np.nanmin(scores)
-    poss_coeffs = outputs[np.nanargmin(scores)][:-1]
-    poss_poly = poly_form(poss_coeffs)
+    if len(inputs):
+        outputs = prun(
+            function=fitting,
+            inputs=inputs,
+            parallel=parallel, n_jobs=n_jobs, backend=backend,
+        )
+        # find the best coefficients
+        scores = [outputs[i][-1] for i in range(len(outputs))]
+        score = np.nanmin(scores)
+        poss_coeffs = outputs[np.nanargmin(scores)][:-1]
+        poss_poly = poly_form(poss_coeffs)
+    else:
+        coeffs = np.full(deg+1, 0., dtype=float)
+        coeffs[0] = -1.
+        score = -1.
+        poss_poly = poly_form(coeffs)
     return poss_poly, score
 
 
@@ -262,7 +270,7 @@ def wavelength_calibration(
     if auto_refine:
         while True:
             # use poss_ys and poss_wls to refine the solution
-            old_score = score.copy()
+            old_score = float(score)
             poss_poly, score = refine_poss_solution(
                 poss_poly, poss_wls, poss_ys,
             )
