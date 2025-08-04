@@ -49,11 +49,11 @@ def calculate_fitting_score(poss_poly, known_wls, all_peak_ys):
     wavelengths at the detected peak y coordinates.
     The smaller the score, the better the fitting.
     """
-    all_peaks_detected_wls = poss_poly(all_peak_ys)
-    residuals = np.abs(all_peaks_detected_wls[:, None] - known_wls[None, :])
-    min_res = np.nanmin(residuals, axis=0)  # deviation: line & nearest peak
+    all_peak_wls = poss_poly(all_peak_ys)
+    residuals = np.abs(all_peak_wls[:, None] - known_wls[None, :])
+    min_res = np.nanmin(residuals, axis=0)  # res: line & nearest peak
     score = np.sum(min_res ** 2)
-    score /= len(known_wls)  # i.e., average error per line
+    score /= len(known_wls)  # i.e., average error per line [wl unit]
     return score
 
 
