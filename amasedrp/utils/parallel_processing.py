@@ -22,6 +22,8 @@ def run(function, inputs, parallel=True, n_jobs=-1, backend='loky'):
     # inputs = [input_0, input_1, ...]
     # outputs = [output_0, output_1, ...]
     """
+    if len(inputs) == 0:
+        raise ValueError("No inputs provided for parallel processing.")
     if parallel:
         if n_jobs == -1:
             n_jobs = min(len(inputs), os.cpu_count())
