@@ -212,7 +212,7 @@ def lstsq_refine_poss_solution(
     initial_guess = [1.0, 0.0]
 
     # minimize the objective function
-    result = minimize(objective, initial_guess, method='L-BFGS-B')
+    result = minimize(objective, initial_guess)
     # extract the optimized parameters
     a_opt, b_opt = result.x
 
@@ -226,6 +226,7 @@ def refine_poss_solution(
         guess_poss_poly,
         known_wls, all_peak_ys,
 ):
+    # match lines method may not work well
     return lstsq_refine_poss_solution(
         guess_poss_poly=guess_poss_poly,
         known_wls=known_wls,
@@ -260,10 +261,12 @@ def wavelength_calibration(
         )
     if auto_refine:
         while True:
-            new_poss_poly, new_score = refine_poss_solution(
-                poss_poly, known_wls, all_peak_ys,
+            # use poss_ys and poss_wls to refine the solution
+            old_score = score.copy()
+            poss_poly, score = refine_poss_solution(
+                poss_poly, poss_wls, poss_ys,
             )
-            if np.isclose(new_score, score, atol=1e-5):
+            if np.isclose(old_score, score, atol=1e-8):
                 break
-            poss_poly, score = new_poss_poly, new_score
+        score = calculate_fitting_score(poss_poly, known_wls, all_peak_ys)
     return poss_poly, score
