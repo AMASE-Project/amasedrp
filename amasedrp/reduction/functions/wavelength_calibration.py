@@ -44,7 +44,7 @@ def detect_lines(spectrum, n_strongest_lines=20, n_all_lines=100):
 def calculate_fitting_score(poss_poly, known_wls, all_peak_ys):
     """
     Suppose that the (strong-enough) known lines with "known_wls" should be
-    included in the peaks detected with "all_peak_ys".
+    included in the peaks detected with "all_peak_ys", as much as possible.
     This function is used to calculate a "score" for the fitting
     based on the residuals between the known wavelengths and the fitted
     wavelengths at the detected peak y coordinates.
@@ -52,9 +52,15 @@ def calculate_fitting_score(poss_poly, known_wls, all_peak_ys):
     """
     all_peak_wls = poss_poly(all_peak_ys)
     residuals = np.abs(all_peak_wls[:, None] - known_wls[None, :])
-    min_res = np.nanmin(residuals, axis=0)  # res: line & nearest peak
-    score = np.sum(min_res ** 2)
-    score /= len(known_wls)  # i.e., average error per line [wl unit]
+    # residuals between known lines and their nearest peaks
+    min_res = np.nanmin(residuals, axis=0)  # [wl unit]
+    # remove outliers
+    cond = np.nanpercentile(min_res, 16) <= min_res
+    cond &= min_res <= np.nanpercentile(min_res, 84)
+    min_res = min_res[cond]
+    del cond
+    # calculate the score (kind of "RMSE")
+    score = np.sqrt(np.sum(min_res ** 2)) / len(min_res)  # [wl unit]
     return score
 
 
