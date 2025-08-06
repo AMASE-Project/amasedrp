@@ -22,7 +22,14 @@ def lsf_gaussian_fitting(
     """ Fit a Gaussian to the LSF of a spectrum around a target wavelength. """
     # adjust the wavelength of the target line
     peaks, _, _, _ = detect_lines(spectrum, n_strongest_lines=20)
+    # if no peaks are detected, return NaN values
+    # (NOTE: can be empty, check it)
+    if len(peaks) == 0:
+        return np.nan, np.array([np.nan, np.nan, np.nan, np.nan])
     residuals = np.abs(spectrum_wls[peaks] - target_wl)
+    # if residuals are empty, return NaN values
+    if len(residuals) == 0:
+        return np.nan, np.array([np.nan, np.nan, np.nan, np.nan])
     adjusted_target_wl = spectrum_wls[peaks[np.argmin(residuals)]]
     if np.abs(adjusted_target_wl - target_wl) < cutout_wl_half_width:
         target_wl = adjusted_target_wl
@@ -37,6 +44,12 @@ def lsf_gaussian_fitting(
     cutout_spectrum_wls = spectrum_wls[cond]
     cutout_spectrum = spectrum[cond]
     del cond
+    # if the cutout spectrum is all NaN, return NaN
+    if np.all(np.isnan(cutout_spectrum)):
+        return np.nan, np.array([np.nan, np.nan, np.nan, np.nan])
+    # if the cutout spectrum is empty, return NaN
+    if len(cutout_spectrum) == 0:
+        return np.nan, np.array([np.nan, np.nan, np.nan, np.nan])
     # fit a Gaussian to the cutout spectrum
     try:
         # initial guess
