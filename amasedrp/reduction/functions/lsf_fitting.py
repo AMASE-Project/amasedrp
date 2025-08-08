@@ -12,49 +12,45 @@ from scipy.optimize import curve_fit
 from .wavelength_calibration import detect_lines
 
 
-def gaussian(x, amplitude, center, sigma, offset):
-    return amplitude * np.exp(-(x - center)**2 / (2 * sigma**2)) + offset
+def adjust_target_wavelength(spectrum, spectrum_wls, target_wl):
+    """
+    Adjust the target wavelength based on the detected peaks in the spectrum.
+    (i.e., find the closest peak to the target wavelength)
+    """
+    peaks, _, _, _ = detect_lines(spectrum, n_strongest_lines=20)
+    # if no peaks are detected, return NaN
+    if len(peaks) == 0:
+        return np.nan
+    residuals = np.abs(spectrum_wls[peaks] - target_wl)
+    # if residuals are empty, return NaN
+    if len(residuals) == 0:
+        return np.nan
+    adjusted_target_wl = spectrum_wls[peaks[np.argmin(residuals)]]
+    return adjusted_target_wl
 
 
-def lsf_gaussian_fitting(
+def extract_spectrum_segment(
         spectrum, spectrum_wls, target_wl, cutout_wl_half_width=1.,
 ):
-    """ Fit a Gaussian to the LSF of a spectrum around a target wavelength. """
-    # adjust the wavelength of the target line
-    peaks, _, _, _ = detect_lines(spectrum, n_strongest_lines=20)
-    # if no peaks are detected, return NaN values
-    # (NOTE: can be empty, check it)
-    if len(peaks) == 0:
-        return np.nan, np.array([np.nan, np.nan, np.nan, np.nan])
-    residuals = np.abs(spectrum_wls[peaks] - target_wl)
-    # if residuals are empty, return NaN values
-    if len(residuals) == 0:
-        return np.nan, np.array([np.nan, np.nan, np.nan, np.nan])
-    adjusted_target_wl = spectrum_wls[peaks[np.argmin(residuals)]]
-    if np.abs(adjusted_target_wl - target_wl) < cutout_wl_half_width:
-        target_wl = adjusted_target_wl
-    else:
-        pass
-    target_wl = spectrum_wls[peaks[np.argmin(residuals)]]
-    # cut out the region around the target wavelength
+    """ Cut out a region of the spectrum around a target wavelength. """
     cutout_wl_window = np.array([-cutout_wl_half_width, cutout_wl_half_width])
     cutout_wl_window += target_wl
     cond = spectrum_wls >= np.min(cutout_wl_window)
     cond &= spectrum_wls <= np.max(cutout_wl_window)
-    cutout_spectrum_wls = spectrum_wls[cond]
-    cutout_spectrum = spectrum[cond]
-    del cond
-    # if the cutout spectrum is all NaN, return NaN
-    if np.all(np.isnan(cutout_spectrum)):
-        return np.nan, np.array([np.nan, np.nan, np.nan, np.nan])
-    # if the cutout spectrum is empty, return NaN
-    if len(cutout_spectrum) == 0:
-        return np.nan, np.array([np.nan, np.nan, np.nan, np.nan])
+    cutout_spectrum, cutout_spectrum_wls = spectrum[cond], spectrum_wls[cond]
+    return cutout_spectrum, cutout_spectrum_wls
+
+
+def gaussian(x, amplitude, center, sigma, offset):
+    return amplitude * np.exp(-(x - center)**2 / (2 * sigma**2)) + offset
+
+
+def gaussian_fitting(cutout_spectrum, cutout_spectrum_wls, target_wl):
     # fit a Gaussian to the cutout spectrum
     try:
         # initial guess
         ini_mu = target_wl
-        ini_sigma = cutout_wl_half_width / 2.
+        ini_sigma = np.ptp(cutout_spectrum_wls) / 5.
         ini_offset = np.nanmedian(cutout_spectrum) * 0.2
         ini_a = np.nanmax(cutout_spectrum - ini_offset)
         initial_guess = [ini_a, ini_mu, ini_sigma, ini_offset]
@@ -68,6 +64,33 @@ def lsf_gaussian_fitting(
     except:  # noqa: E722
         target_popt = np.array([np.nan, np.nan, np.nan, np.nan])
         target_fwhm = np.nan
+    return target_fwhm, target_popt
+
+
+def lsf_gaussian_fitting(
+        spectrum, spectrum_wls, target_wl, cutout_wl_half_width=1.,
+):
+    """ Fit a Gaussian to the LSF of a spectrum around a target wavelength. """
+    # adjust the wavelength of the target line
+    target_wl = adjust_target_wavelength(spectrum, spectrum_wls, target_wl)
+    # if the target wavelength is NaN, return NaN values
+    if np.isnan(target_wl):
+        return np.nan, np.array([np.nan, np.nan, np.nan, np.nan])
+    # cut out the region around the target wavelength
+    cutout_spectrum, cutout_spectrum_wls = extract_spectrum_segment(
+        spectrum, spectrum_wls, target_wl, cutout_wl_half_width,
+    )
+    # if the cutout spectrum is all NaN, return NaN values
+    if np.all(np.isnan(cutout_spectrum)):
+        return np.nan, np.array([np.nan, np.nan, np.nan, np.nan])
+    # if the cutout spectrum is empty, return NaN values
+    if len(cutout_spectrum) == 0:
+        return np.nan, np.array([np.nan, np.nan, np.nan, np.nan])
+
+    # fit a Gaussian to the cutout spectrum
+    target_fwhm, target_popt = gaussian_fitting(
+        cutout_spectrum, cutout_spectrum_wls, target_wl,
+    )
     return target_fwhm, target_popt
 
 
