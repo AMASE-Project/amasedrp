@@ -288,3 +288,16 @@ def wavelength_calibration(
                 break
         score = calculate_fitting_score(poss_poly, known_wls, all_peak_ys)
     return poss_poly, score
+
+
+def inv_poss_poly(poss_poly, wl, y_min=0., y_max=9600., atol=1e-5):
+    """ Inverse the polynomial to get y from wl. """
+    y_mid = (y_min + y_max) / 2.
+    while np.abs(y_max - y_min) > atol:
+        wl_mid = poss_poly(y_mid)
+        if wl_mid < wl:
+            y_min = y_mid
+        else:
+            y_max = y_mid
+        y_mid = (y_min + y_max) / 2.
+    return y_mid
