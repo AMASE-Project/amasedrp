@@ -68,34 +68,69 @@ def gaussian_fitting(cutout_spectrum, cutout_spectrum_wls, target_wl):
 
 
 def lsf_gaussian_fitting(
-        spectrum, spectrum_wls, target_wl, cutout_wl_half_width=1.,
+        spectrum, spectrum_wls, target_wl,
+        cutout_wl_half_width=1.,
+        adjust_target_wl=True,
 ):
     """ Fit a Gaussian to the LSF of a spectrum around a target wavelength. """
+    # default return
+    target_fwhm = np.nan
+    target_popt = np.array([np.nan, np.nan, np.nan, np.nan])
+    target_func = lambda x: np.full(len(x), np.nan, dtype=float)  # noqa: E731
+    cutout_spectrum_wls = np.array([])
+    cutout_spectrum = np.array([])
+
     # adjust the wavelength of the target line
-    target_wl = adjust_target_wavelength(spectrum, spectrum_wls, target_wl)
+    if adjust_target_wl:
+        target_wl = adjust_target_wavelength(spectrum, spectrum_wls, target_wl)
+
     # if the target wavelength is NaN, return NaN values
     if np.isnan(target_wl):
-        return np.nan, np.array([np.nan, np.nan, np.nan, np.nan])
+        return (
+            target_fwhm,
+            target_popt, target_func,
+            cutout_spectrum_wls, cutout_spectrum,
+        )
+
     # cut out the region around the target wavelength
     cutout_spectrum, cutout_spectrum_wls = extract_spectrum_segment(
         spectrum, spectrum_wls, target_wl, cutout_wl_half_width,
     )
+
     # if the cutout spectrum is all NaN, return NaN values
     if np.all(np.isnan(cutout_spectrum)):
-        return np.nan, np.array([np.nan, np.nan, np.nan, np.nan])
+        return (
+            target_fwhm,
+            target_popt, target_func,
+            cutout_spectrum_wls, cutout_spectrum,
+        )
+
     # if the cutout spectrum is empty, return NaN values
     if len(cutout_spectrum) == 0:
-        return np.nan, np.array([np.nan, np.nan, np.nan, np.nan])
+        return (
+            target_fwhm,
+            target_popt, target_func,
+            cutout_spectrum_wls, cutout_spectrum,
+        )
 
     # fit a Gaussian to the cutout spectrum
     target_fwhm, target_popt = gaussian_fitting(
         cutout_spectrum, cutout_spectrum_wls, target_wl,
     )
-    return target_fwhm, target_popt
+
+    # fitting function
+    def target_func(x):
+        return gaussian(x, *target_popt)
+
+    return (
+        target_fwhm,
+        target_popt, target_func,
+        cutout_spectrum_wls, cutout_spectrum,
+    )
 
 
 def lsf_fitting(spectrum, spectrum_wls, target_wl):
-    target_fwhm, _ = lsf_gaussian_fitting(
+    target_fwhm, _, _, _, _ = lsf_gaussian_fitting(
         spectrum, spectrum_wls, target_wl,
         cutout_wl_half_width=1.,
     )
