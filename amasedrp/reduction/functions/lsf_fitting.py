@@ -119,7 +119,7 @@ def lsf_gaussian_fitting(
     # so we return NaN values
     if ignore_double_peaks:
         peaks, _, _, _ = detect_lines(cutout_spectrum, n_strongest_lines=2)
-        if len(peaks) >= 2:
+        if len(peaks) == 2:
             if (
                 np.min(cutout_spectrum[peaks]) / np.max(cutout_spectrum[peaks])
                 > 0.3
@@ -149,6 +149,6 @@ def lsf_gaussian_fitting(
 def lsf_fitting(spectrum, spectrum_wls, target_wl):
     target_fwhm, _, _, _, _ = lsf_gaussian_fitting(
         spectrum, spectrum_wls, target_wl,
-        cutout_wl_half_width=1.,
+        cutout_wl_half_width=5.,
     )
     return target_fwhm
