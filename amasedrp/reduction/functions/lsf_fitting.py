@@ -70,7 +70,8 @@ def gaussian_fitting(cutout_spectrum, cutout_spectrum_wls, target_wl):
 def lsf_gaussian_fitting(
         spectrum, spectrum_wls, target_wl,
         cutout_wl_half_width=1.,
-        adjust_target_wl=True,
+        adjust_target_wl=False,
+        ignore_double_peaks=True,
 ):
     """ Fit a Gaussian to the LSF of a spectrum around a target wavelength. """
     # default return
@@ -112,6 +113,22 @@ def lsf_gaussian_fitting(
             target_popt, target_func,
             cutout_spectrum_wls, cutout_spectrum,
         )
+
+    # if there are two or more strong lines in the cutout spectrum,
+    # then the corresponding PSF may be too complex to fit a Gaussian,
+    # so we return NaN values
+    if ignore_double_peaks:
+        peaks, _, _, _ = detect_lines(cutout_spectrum, n_strongest_lines=2)
+        if len(peaks) >= 2:
+            if (
+                np.min(cutout_spectrum[peaks]) / np.max(cutout_spectrum[peaks])
+                > 0.3
+            ):
+                return (
+                    target_fwhm,
+                    target_popt, target_func,
+                    cutout_spectrum_wls, cutout_spectrum,
+                )
 
     # fit a Gaussian to the cutout spectrum
     target_fwhm, target_popt = gaussian_fitting(

@@ -21,12 +21,12 @@ def detect_lines(spectrum, n_strongest_lines=20, n_all_lines=100):
     Detect all and strongest lines in the spectrum.
     """
     # smooth the spectrum & find peaks
-    spectrum = gaussian_filter1d(spectrum, sigma=1)
+    smooth_spectrum = gaussian_filter1d(spectrum, sigma=1)
     # if spectrum is all NaN, return empty arrays
-    if np.all(np.isnan(spectrum)):
+    if np.all(np.isnan(smooth_spectrum)):
         return np.array([]), np.array([]), np.array([]), np.array([])
     # find peaks in the spectrum
-    peaks, _ = find_peaks(spectrum, height=np.nanmedian(spectrum))
+    peaks, _ = find_peaks(smooth_spectrum, height=np.nanmedian(spectrum))
     ys = np.arange(len(spectrum))[peaks]
     heights = spectrum[peaks]
     # sort by height
