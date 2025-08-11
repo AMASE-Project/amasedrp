@@ -150,5 +150,6 @@ def lsf_fitting(spectrum, spectrum_wls, target_wl):
     target_fwhm, _, _, _, _ = lsf_gaussian_fitting(
         spectrum, spectrum_wls, target_wl,
         cutout_wl_half_width=5.,
+        adjust_target_wl=True,
     )
     return target_fwhm
