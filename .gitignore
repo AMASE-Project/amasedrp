@@ -135,10 +135,16 @@ cython_debug/
 .vscode/
 
 # Temporary files/directories during AMASE pipeline development
-test*
-test*/
-tmp*
-tmp*/
+data/raw/
+data/interim/
+data/products/
+!data/raw/.gitkeep
+!data/interim/.gitkeep
+!data/products/.gitkeep
+# test*
+# test*/
+# tmp*
+# tmp*/
 Untitled*
 *Copy*
 
