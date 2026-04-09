@@ -8,6 +8,7 @@
 @Description:  Class for handling 2D CMOS image data.
 '''
 
+import os
 from astropy.io import fits
 from astroscrappy import detect_cosmics
 
@@ -28,6 +29,7 @@ class Image:
     @classmethod
     def from_fits(cls, filename):
         """Create an Image object by reading a FITS file."""
+        filename = os.path.abspath(os.path.expanduser(filename))
         with fits.open(filename) as hdul:
             data = hdul[0].data
             header = hdul[0].header
