@@ -9,6 +9,7 @@
 '''
 
 import os
+import copy
 from astropy.io import fits
 from astroscrappy import detect_cosmics
 
@@ -68,6 +69,16 @@ class Image:
     @property
     def imgtype(self):
         return self.header.get('IMAGETYP', default=None)
+
+    #########################################################################
+    # utilities
+    #########################################################################
+    def copy(self):
+        """Create a deep of the Image object."""
+        return Image(
+            data=copy.deepcopy(self.data),
+            header=copy.deepcopy(self.header)
+        )
 
     ########################################################################
     # image processing
