@@ -1,17 +1,22 @@
 #!/usr/bin/env python
 # -*-coding:utf-8 -*-
-'''
+"""
 @File:         image.py
 @Time:         2026/04/09 15:48:04
 @Author:       Guangquan ZENG
 @Contact:      guangquan.zeng@outlook.com
 @Description:  Class for handling 2D CMOS image data.
-'''
+"""
 
-import os
 import copy
+import os
+from typing import Any, Self
+
+import numpy as np
 from astropy.io import fits
-from astroscrappy import detect_cosmics
+from astroscrappy import (
+    detect_cosmics,  # type: ignore[import] Cython extension, not in type stubs
+)
 
 
 class Image:
@@ -19,33 +24,38 @@ class Image:
     Class to handle 2D CMOS image data.
     """
 
-    def __init__(self, data, header):
-        self.data = data
-        self.header = header
+    def __init__(
+        self, data: np.ndarray, header: fits.Header, filename: str | None = None
+    ) -> None:
+        self.data: np.ndarray = data
+        self.header: fits.Header = header
+        self.filename: str | None = filename
 
     ########################################################################
     # I/O
     ########################################################################
 
     @classmethod
-    def from_fits(cls, filename):
+    def from_fits(cls, filename: str) -> Self:
         """Create an Image object by reading a FITS file."""
-        filename = os.path.abspath(os.path.expanduser(filename))
-        with fits.open(filename) as hdul:
-            data = hdul[0].data
-            header = hdul[0].header
-        image = cls(data=data, header=header)
-        image.filename = filename
-        return image
+        abs_filename = os.path.abspath(os.path.expanduser(filename))
+        with fits.open(abs_filename) as hdul:
+            hdu: fits.PrimaryHDU | Any = hdul[0]
+            data: np.ndarray = hdu.data
+            header: fits.Header = hdu.header
+        return cls(data=data, header=header, filename=abs_filename)
 
-    def readFromFits(self, filename):
+    def read_from_fits(self, filename: str) -> None:
         """Read the image from a FITS file."""
         with fits.open(filename) as hdul:
-            self.data = hdul[0].data
-            self.header = hdul[0].header
+            hdu: fits.PrimaryHDU | Any = hdul[0]
+            data: np.ndarray = hdu.data
+            header: fits.Header = hdu.header
+        self.data = data
+        self.header = header
         self.filename = filename
 
-    def writeToFits(self, filename):
+    def write_to_fits(self, filename: str) -> None:
         """Write the image to a FITS file."""
         hdu = fits.PrimaryHDU(self.data, header=self.header)
         hdu.writeto(filename, overwrite=True)
@@ -55,36 +65,47 @@ class Image:
     ########################################################################
 
     @property
-    def shape(self):
+    def shape(self) -> tuple[int, ...] | None:
         return self.data.shape if self.data is not None else None
 
     @property
-    def exptime(self):
-        return self.header.get('EXPTIME', default=None)
+    def exptime(self) -> float | None:
+        value = self.header.get("EXPTIME", default=None)
+        if value is None or not isinstance(value, (int, float)):
+            return None
+        return float(value)
 
     @property
-    def gain(self):
-        return self.header.get('GAIN', default=None)
+    def gain(self) -> float | None:
+        value = self.header.get("GAIN", default=None)
+        if value is None or not isinstance(value, (int, float)):
+            return None
+        return float(value)
 
     @property
-    def imgtype(self):
-        return self.header.get('IMAGETYP', default=None)
+    def imgtype(self) -> str | None:
+        value = self.header.get("IMAGETYP", default=None)
+        if value is None or not isinstance(value, str):
+            return None
+        return value
 
     #########################################################################
     # utilities
     #########################################################################
-    def copy(self):
-        """Create a deep of the Image object."""
+
+    def copy(self) -> "Image":
+        """Create a deep copy of the Image object."""
         return Image(
             data=copy.deepcopy(self.data),
-            header=copy.deepcopy(self.header)
+            header=copy.deepcopy(self.header),
+            filename=self.filename,
         )
 
     ########################################################################
     # image processing
     ########################################################################
 
-    def detectCosmicRays(self, **kwargs):
+    def detect_cosmic_rays(self, **kwargs: Any) -> tuple[np.ndarray, np.ndarray]:
         """
         Detect cosmic rays in the image using the L.A.Cosmic algorithm,
         based on Laplacian edge detection (van Dokkum 2001).
