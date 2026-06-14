@@ -45,6 +45,8 @@ class Image:
             header: fits.Header = hdu.header
         return cls(data=data, header=header, filename=abs_filename)
 
+    # NOTE: When to use this method vs. `from_fits()`?
+    # NOTE: Maybe we can only keep `from_fits()`?
     def read_from_fits(self, filename: str) -> None:
         """Read the image from a FITS file."""
         with fits.open(filename) as hdul:
