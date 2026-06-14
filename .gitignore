@@ -35,8 +35,7 @@ pro/*.swp
 pro/*.swo
 
 # pycache
-kcwi/__pycache__
-kcwikit/kcwi/__pycache__
+**__pycache__
 *.pyc
 
 # Byte-compiled / optimized / DLL files

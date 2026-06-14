@@ -13,7 +13,7 @@ import numpy as np
 from typing import Optional
 import matplotlib.pyplot as plt
 from astropy.io.fits import Header
-from ..core.image import Image
+from ..core.legacy_image import Image
 
 
 def load_image(filename: str) -> Image:
