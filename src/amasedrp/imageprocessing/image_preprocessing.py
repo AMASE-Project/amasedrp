@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*-coding:utf-8 -*-
-'''
+"""
 @File:         image_preprocessing.py
 @Time:         2026/04/09 16:59:59
 @Author:       Guangquan ZENG
@@ -8,7 +8,7 @@
 @Description:  Main functions for image preprocessing,
                including e.g., bias subtraction, dark subtraction,
                pixel flat-field correction, cosmic ray removal, etc.
-'''
+"""
 
 import logging
 from typing import Any
@@ -16,8 +16,9 @@ from typing import Any
 import numpy as np
 
 from .classes.image import Image
+from ..utils.logging import configure_logging
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 _VALID_STEPS: tuple[str, str, str] = ("bias", "dark", "flat")
 
@@ -91,8 +92,7 @@ def _validate_inputs(
 
     if "flat" in steps:
         for name, img, needed_for in [
-            ("master_pixflat_image", master_pixflat_image,
-             "flat-field correction"),
+            ("master_pixflat_image", master_pixflat_image, "flat-field correction"),
         ]:
             exptime = img.exptime
             if exptime is None:
@@ -159,23 +159,37 @@ def image_calibration(
             non-positive, a requested *step* is invalid, or the median of
             the pixel flat field is zero/NaN.
     """
+    if input_image.header.get("CALIBRAT"):
+        logger.warning(
+            "Input image already has CALIBRAT keyword; it may have been calibrated."
+        )
+    if not steps:
+        logger.warning("No calibration steps requested; image will be returned unchanged.")
+
     # -- validate steps -------------------------------------------------------
     for step in steps:
         if step not in _VALID_STEPS:
-            raise ValueError(
-                f"Invalid step '{step}'. Valid steps are: {_VALID_STEPS}"
-            )
+            raise ValueError(f"Invalid step '{step}'. Valid steps are: {_VALID_STEPS}")
 
     # -- validate inputs ------------------------------------------------------
     _validate_inputs(
-        input_image, master_bias_image, master_dark_image,
-        master_pixflat_image, steps,
+        input_image,
+        master_bias_image,
+        master_dark_image,
+        master_pixflat_image,
+        steps,
     )
 
     # -- create output copy ---------------------------------------------------
     output_image = input_image.copy()
 
     # -- cosmic ray removal (before any calibration) -------------------------
+    if cr_kwargs and not remove_cosmic_rays:
+        logger.warning(
+            "cr_kwargs provided but remove_cosmic_rays is False; "
+            "cr_kwargs will be ignored."
+        )
+
     if remove_cosmic_rays:
         logger.info("Applying cosmic ray removal...")
         cr_kw = cr_kwargs or {}
@@ -208,9 +222,7 @@ def image_calibration(
         flat_exptime = master_pixflat_image.exptime
         assert flat_exptime is not None and flat_exptime > 0  # validated
         assert darkcurr is not None  # guard — computed above
-        pixflat: np.ndarray = (
-            (flat_data - bias_data) - darkcurr * flat_exptime
-        )
+        pixflat: np.ndarray = (flat_data - bias_data) - darkcurr * flat_exptime
         median_pixflat: float = float(np.nanmedian(pixflat))
         if median_pixflat == 0.0 or np.isnan(median_pixflat):
             raise ValueError(
@@ -243,19 +255,13 @@ def image_calibration(
     # -- header provenance ---------------------------------------------------
     output_image.header["CALIBRAT"] = True
     output_image.header["MBIAS"] = (
-        master_bias_image.filename
-        if master_bias_image.filename
-        else "unknown"
+        master_bias_image.filename if master_bias_image.filename else "unknown"
     )
     output_image.header["MDARK"] = (
-        master_dark_image.filename
-        if master_dark_image.filename
-        else "unknown"
+        master_dark_image.filename if master_dark_image.filename else "unknown"
     )
     output_image.header["MFLAT"] = (
-        master_pixflat_image.filename
-        if master_pixflat_image.filename
-        else "unknown"
+        master_pixflat_image.filename if master_pixflat_image.filename else "unknown"
     )
     for step in steps:
         output_image.header.add_history(f"{step} calibration applied")
@@ -273,6 +279,7 @@ def image_preprocessing(
     remove_cosmic_rays: bool = False,
     cr_kwargs: dict[str, Any] | None = None,
     update_header: dict[str, Any] | None = None,
+    log_file: str | None = None,
 ) -> Image:
     """Read, calibrate, and persist a science image.
 
@@ -292,10 +299,22 @@ def image_preprocessing(
         update_header: Optional dictionary of FITS header keywords to
             write into the output file (in addition to the provenance
             keywords set by ``image_calibration``).
+        log_file: Optional path to a log file. If provided, the
+            preprocessing module logger is configured to write *INFO*
+            and *WARNING* messages to this file.
 
     Returns:
         The calibrated ``Image`` object.
     """
+    if log_file is not None:
+        configure_logging(log_file)
+
+    if cr_kwargs and not remove_cosmic_rays:
+        logger.warning(
+            "cr_kwargs provided but remove_cosmic_rays is False; "
+            "cr_kwargs will be ignored."
+        )
+
     input_image = Image.from_fits(input_path)
     master_bias = Image.from_fits(bias_path)
     master_dark = Image.from_fits(dark_path)
