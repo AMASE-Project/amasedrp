@@ -57,7 +57,9 @@ class Image:
         self.header = header
         self.filename = filename
 
-    def write_to_fits(self, filename: str, update_header: dict[str, Any] | None = None) -> None:
+    def write_to_fits(
+        self, filename: str, update_header: dict[str, Any] | None = None
+    ) -> None:
         """Write the image to a FITS file.
 
         Args:
@@ -95,7 +97,7 @@ class Image:
         return float(value)
 
     @property
-    def readout_noise(self) -> float | None:
+    def rdnoise(self) -> float | None:
         """Readout noise of the detector, in electrons.
 
         The value is read from the ``RDNOISE`` keyword in the FITS header.
@@ -104,6 +106,7 @@ class Image:
             float: The readout noise if the ``RDNOISE`` keyword is present and valid.
             None: If the keyword is missing or has an invalid value.
         """
+        # NOTE: what is our keyword for readout noise? check it.
         value = self.header.get("RDNOISE", default=None)
         if value is None or not isinstance(value, (int, float)):
             return None
@@ -128,8 +131,8 @@ class Image:
             filename=self.filename,
         )
 
-    def cutout(self, x_start: int, y_start: int, x_end: int, y_end: int) -> np.ndarray:
-        """Extract a cutout from the image."""
+    def cutout(self, x_start: int, x_end: int, y_start: int, y_end: int) -> np.ndarray:
+        """Extract a cutout from the image data."""
         if self.data is None:
             raise ValueError("Image data is not available.")
         if (
