@@ -103,6 +103,19 @@ class Image:
             filename=self.filename,
         )
 
+    def cutout(self, x_start: int, y_start: int, x_end: int, y_end: int) -> np.ndarray:
+        """Extract a cutout from the image."""
+        if self.data is None:
+            raise ValueError("Image data is not available.")
+        if (
+            x_start < 0
+            or y_start < 0
+            or x_end > self.data.shape[1]
+            or y_end > self.data.shape[0]
+        ):
+            raise ValueError("Cutout coordinates are out of bounds.")
+        return self.data[y_start:y_end, x_start:x_end]
+
     ########################################################################
     # image processing
     ########################################################################
