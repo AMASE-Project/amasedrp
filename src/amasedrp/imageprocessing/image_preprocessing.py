@@ -10,69 +10,306 @@
                pixel flat-field correction, cosmic ray removal, etc.
 '''
 
+import logging
+from typing import Any
+
 import numpy as np
+
+from .classes.image import Image
+
+logger = logging.getLogger(__name__)
+
+_VALID_STEPS: tuple[str, str, str] = ("bias", "dark", "flat")
+
+
+def _validate_inputs(
+    input_image: Image,
+    master_bias_image: Image,
+    master_dark_image: Image,
+    master_pixflat_image: Image,
+    steps: tuple[str, ...],
+) -> None:
+    """Validate calibration input images.
+
+    Checks that all inputs are ``Image`` instances with non-None data,
+    that all data arrays have matching shapes, and that EXPTIME values
+    required by the requested calibration steps are present and positive.
+
+    Args:
+        input_image: The science image.
+        master_bias_image: Master bias frame.
+        master_dark_image: Master dark frame.
+        master_pixflat_image: Master pixel flat field.
+        steps: Requested calibration steps.
+
+    Raises:
+        ValueError: If any validation check fails.
+    """
+    # Type checks
+    for name, img in [
+        ("input_image", input_image),
+        ("master_bias_image", master_bias_image),
+        ("master_dark_image", master_dark_image),
+        ("master_pixflat_image", master_pixflat_image),
+    ]:
+        if not isinstance(img, Image):
+            raise ValueError(
+                f"{name} must be an Image instance, got {type(img).__name__}"
+            )
+        if img.data is None:
+            raise ValueError(f"{name} has no data (data is None)")
+
+    # Shape checks — all calibration frames must match the science frame
+    ref_shape = input_image.data.shape
+    for name, img in [
+        ("master_bias_image", master_bias_image),
+        ("master_dark_image", master_dark_image),
+        ("master_pixflat_image", master_pixflat_image),
+    ]:
+        if img.data.shape != ref_shape:
+            raise ValueError(
+                f"Shape mismatch: input_image has shape {ref_shape}, "
+                f"but {name} has shape {img.data.shape}"
+            )
+
+    # EXPTIME checks (only for steps that actually need it)
+    if "dark" in steps:
+        for name, img, needed_for in [
+            ("master_dark_image", master_dark_image, "dark subtraction"),
+            ("input_image", input_image, "dark subtraction"),
+        ]:
+            exptime = img.exptime
+            if exptime is None:
+                raise ValueError(
+                    f"{name} has no EXPTIME keyword, required for {needed_for}"
+                )
+            if exptime <= 0:
+                raise ValueError(
+                    f"{name} EXPTIME={exptime} must be positive, "
+                    f"required for {needed_for}"
+                )
+
+    if "flat" in steps:
+        for name, img, needed_for in [
+            ("master_pixflat_image", master_pixflat_image,
+             "flat-field correction"),
+        ]:
+            exptime = img.exptime
+            if exptime is None:
+                raise ValueError(
+                    f"{name} has no EXPTIME keyword, required for {needed_for}"
+                )
+            if exptime <= 0:
+                raise ValueError(
+                    f"{name} EXPTIME={exptime} must be positive, "
+                    f"required for {needed_for}"
+                )
 
 
 def image_calibration(
+    input_image: Image,
+    master_bias_image: Image,
+    master_dark_image: Image,
+    master_pixflat_image: Image,
+    steps: tuple[str, ...] = ("bias", "dark", "flat"),
+    remove_cosmic_rays: bool = False,
+    cr_kwargs: dict[str, Any] | None = None,
+) -> Image:
+    """Calibrate a science image with bias, dark, and flat-field corrections.
+
+    The calibration follows standard detector physics:
+
+    * bias  = bias_level + readout_noise
+    * dark  = dark_current * t_exp + bias
+    * flat  = illumination * pixel_response + dark_current * t_exp + bias
+    * science = signal * pixel_response + dark_current * t_exp + bias
+
+    Steps applied (in fixed order by request)::
+
+        dark_curr = (dark - bias) / dark_exptime
+        pix_flat   = (flat - bias) - dark_curr * flat_exptime
+        pix_resp   = pix_flat / median(pix_flat)
+
+        S1 = science - bias
+        S2 = S1 - dark_curr * science_exptime
+        S3 = S2 / pix_resp
+
+    Args:
+        input_image: The science ``Image`` to calibrate.
+        master_bias_image: Master bias frame.
+        master_dark_image: Master dark frame.
+        master_pixflat_image: Master pixel flat field.
+        steps: Calibration steps to apply.  Valid values are ``"bias"``,
+            ``"dark"``, ``"flat"``.  Steps are applied in the fixed logical
+            order regardless of the tuple order.
+        remove_cosmic_rays: If ``True``, detect and remove cosmic rays from
+            the *input* image **before** any calibration steps.
+        cr_kwargs: Optional keyword arguments forwarded to
+            ``Image.detect_cosmic_rays()``.  Ignored when
+            *remove_cosmic_rays* is ``False``.
+
+    Returns:
+        A new calibrated ``Image`` whose header carries provenance keywords
+        (``CALIBRAT``, ``MBIAS``, ``MDARK``, ``MFLAT``, and ``HISTORY``
+        entries for each applied step).
+
+    Raises:
+        ValueError: If any input is not an ``Image``, data is missing,
+            shapes do not match, required EXPTIME values are absent or
+            non-positive, a requested *step* is invalid, or the median of
+            the pixel flat field is zero/NaN.
+    """
+    # -- validate steps -------------------------------------------------------
+    for step in steps:
+        if step not in _VALID_STEPS:
+            raise ValueError(
+                f"Invalid step '{step}'. Valid steps are: {_VALID_STEPS}"
+            )
+
+    # -- validate inputs ------------------------------------------------------
+    _validate_inputs(
         input_image, master_bias_image, master_dark_image,
-        master_pixflat_image):
-    """Image calibration by applying bias subtraction, dark subtraction,
-    and pixel flat-field correction."""
-    # For each image, the detector pixel value in principal is as follows:
-    # bias image       = bias level + readout noise
-    # dark image       = dark current * exposure time
-    #                    + bias level + readout noise
-    # pixel flat image = uniform illumination * pixel response
-    #                    + dark current * exposure time
-    #                    + bias level + readout noise
-    # science image    = science signal * pixel response
-    #                    + dark current * exposure time
-    #                    + bias level + readout noise
-    #
-    # Thus, the calibration steps can be expressed as:
-    # (1) calclute the needed calibration data
-    # darkcurr' = (dark - bias) / dark exposure time
-    # pixflat'  = (pixel flat - bias) - darkcurr' * pixel flat exposure time
-    # pixresp'  = pixflat' / median(pixflat')
-    # (2) apply the calibration to the science image:
-    # bias subtraction:    S1 = science - bias
-    # dark subtraction:    S2 = S1 - darkcurr' * science exposure time
-    # pixel flat fielding: S3 = S2 / pixresp'
+        master_pixflat_image, steps,
+    )
 
-    # calculate the needed calibration data
-    darkcurr = ((master_dark_image.data - master_bias_image.data)
-                / master_dark_image.exptime)
-    pixflat = ((master_pixflat_image.data - master_bias_image.data)
-               - darkcurr * master_pixflat_image.exptime)
-    pixresp = pixflat / np.nanmedian(pixflat)
-
-    # create a copy of the input image for preprocessing
+    # -- create output copy ---------------------------------------------------
     output_image = input_image.copy()
-    output_image.data = output_image.data.astype(np.float32)
 
-    # bias subtraction
-    print("Applying bias subtraction...")
-    output_image.data -= master_bias_image.data
-    print("Bias subtraction applied.")
-    print('\n')
+    # -- cosmic ray removal (before any calibration) -------------------------
+    if remove_cosmic_rays:
+        logger.info("Applying cosmic ray removal...")
+        cr_kw = cr_kwargs or {}
+        _crmask, cleanarr = input_image.detect_cosmic_rays(**cr_kw)
+        output_image.data = cleanarr.astype(np.float32)
+        logger.info("Cosmic ray removal applied.")
+    else:
+        # Cast to float32 proactively — prevents integer overflow during
+        # arithmetic on unsigned-integer master frames.
+        output_image.data = output_image.data.astype(np.float32)
 
-    # dark subtraction
-    print("Applying dark subtraction...")
-    output_image.data -= darkcurr * input_image.exptime
-    print("Dark subtraction applied.")
-    print('\n')
+    # -- pre-compute calibration data -----------------------------------------
+    # All master arrays are explicitly cast to float32 before arithmetic
+    # to avoid accidental integer wrapping.
+    bias_data: np.ndarray = master_bias_image.data.astype(np.float32)
+    dark_data: np.ndarray = master_dark_image.data.astype(np.float32)
+    flat_data: np.ndarray = master_pixflat_image.data.astype(np.float32)
 
-    # pixel flat-fielding
-    print("Applying pixel flat-field correction...")
-    output_image.data /= pixresp
-    print("Pixel flat-field correction applied.")
-    print('\n')
+    darkcurr: np.ndarray | None = None
+    pixresp: np.ndarray | None = None
+
+    # darkcurr is needed by the "dark" step (subtraction) and by
+    # the "flat" step (through pixflat/pixresp calculation).
+    if "dark" in steps or "flat" in steps:
+        dark_exptime = master_dark_image.exptime
+        assert dark_exptime is not None and dark_exptime > 0  # validated
+        darkcurr = (dark_data - bias_data) / dark_exptime
+
+    if "flat" in steps:
+        flat_exptime = master_pixflat_image.exptime
+        assert flat_exptime is not None and flat_exptime > 0  # validated
+        assert darkcurr is not None  # guard — computed above
+        pixflat: np.ndarray = (
+            (flat_data - bias_data) - darkcurr * flat_exptime
+        )
+        median_pixflat: float = float(np.nanmedian(pixflat))
+        if median_pixflat == 0.0 or np.isnan(median_pixflat):
+            raise ValueError(
+                f"Median of pixel flat field is {median_pixflat}; "
+                "cannot compute flat-field correction (division by zero)."
+            )
+        pixresp = pixflat / median_pixflat
+
+    # -- apply steps in fixed logical order ----------------------------------
+    for step in steps:
+        if step == "bias":
+            logger.info("Applying bias subtraction...")
+            output_image.data -= bias_data
+            logger.info("Bias subtraction applied.")
+
+        elif step == "dark":
+            logger.info("Applying dark subtraction...")
+            input_exptime = input_image.exptime
+            assert input_exptime is not None and input_exptime > 0  # validated
+            assert darkcurr is not None  # guard — computed above
+            output_image.data -= darkcurr * input_exptime
+            logger.info("Dark subtraction applied.")
+
+        elif step == "flat":
+            logger.info("Applying pixel flat-field correction...")
+            assert pixresp is not None  # guard — computed above
+            output_image.data /= pixresp
+            logger.info("Pixel flat-field correction applied.")
+
+    # -- header provenance ---------------------------------------------------
+    output_image.header["CALIBRAT"] = True
+    output_image.header["MBIAS"] = (
+        master_bias_image.filename
+        if master_bias_image.filename
+        else "unknown"
+    )
+    output_image.header["MDARK"] = (
+        master_dark_image.filename
+        if master_dark_image.filename
+        else "unknown"
+    )
+    output_image.header["MFLAT"] = (
+        master_pixflat_image.filename
+        if master_pixflat_image.filename
+        else "unknown"
+    )
+    for step in steps:
+        output_image.header.add_history(f"{step} calibration applied")
 
     return output_image
 
 
-def image_preprocessing():
-    # NOTE: e.g., given path for bias, dark, flat, and science images
-    # read the images, then conduct the pre-processing operations,
-    # and finally save the processed images.
-    pass
+def image_preprocessing(
+    input_path: str,
+    bias_path: str,
+    dark_path: str,
+    flat_path: str,
+    output_path: str,
+    steps: tuple[str, ...] = ("bias", "dark", "flat"),
+    remove_cosmic_rays: bool = False,
+    cr_kwargs: dict[str, Any] | None = None,
+    update_header: dict[str, Any] | None = None,
+) -> Image:
+    """Read, calibrate, and persist a science image.
+
+    High-level orchestrator that reads master calibration frames and a
+    science frame from disk, runs ``image_calibration``, writes the
+    result to a FITS file, and returns the calibrated ``Image`` object.
+
+    Args:
+        input_path: Path to the science FITS file.
+        bias_path: Path to the master bias FITS file.
+        dark_path: Path to the master dark FITS file.
+        flat_path: Path to the master pixel flat FITS file.
+        output_path: Destination path for the calibrated FITS file.
+        steps: Calibration steps to apply.
+        remove_cosmic_rays: Whether to apply cosmic ray removal.
+        cr_kwargs: Optional keyword arguments for cosmic ray detection.
+        update_header: Optional dictionary of FITS header keywords to
+            write into the output file (in addition to the provenance
+            keywords set by ``image_calibration``).
+
+    Returns:
+        The calibrated ``Image`` object.
+    """
+    input_image = Image.from_fits(input_path)
+    master_bias = Image.from_fits(bias_path)
+    master_dark = Image.from_fits(dark_path)
+    master_flat = Image.from_fits(flat_path)
+
+    output = image_calibration(
+        input_image=input_image,
+        master_bias_image=master_bias,
+        master_dark_image=master_dark,
+        master_pixflat_image=master_flat,
+        steps=steps,
+        remove_cosmic_rays=remove_cosmic_rays,
+        cr_kwargs=cr_kwargs,
+    )
+
+    output.write_to_fits(output_path, update_header=update_header)
+    return output

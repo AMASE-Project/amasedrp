@@ -57,9 +57,19 @@ class Image:
         self.header = header
         self.filename = filename
 
-    def write_to_fits(self, filename: str) -> None:
-        """Write the image to a FITS file."""
-        hdu = fits.PrimaryHDU(self.data, header=self.header)
+    def write_to_fits(self, filename: str, update_header: dict[str, Any] | None = None) -> None:
+        """Write the image to a FITS file.
+
+        Args:
+            filename: Path to the output FITS file.
+            update_header: Optional dictionary of header keywords to update
+                before writing. A copy of the current header is modified so
+                the original ``self.header`` is not mutated.
+        """
+        header = self.header.copy() if update_header is not None else self.header
+        if update_header is not None:
+            header.update(update_header)
+        hdu = fits.PrimaryHDU(self.data, header=header)
         hdu.writeto(filename, overwrite=True)
 
     ########################################################################
@@ -80,6 +90,21 @@ class Image:
     @property
     def gain(self) -> float | None:
         value = self.header.get("GAIN", default=None)
+        if value is None or not isinstance(value, (int, float)):
+            return None
+        return float(value)
+
+    @property
+    def readout_noise(self) -> float | None:
+        """Readout noise of the detector, in electrons.
+
+        The value is read from the ``RDNOISE`` keyword in the FITS header.
+
+        Returns:
+            float: The readout noise if the ``RDNOISE`` keyword is present and valid.
+            None: If the keyword is missing or has an invalid value.
+        """
+        value = self.header.get("RDNOISE", default=None)
         if value is None or not isinstance(value, (int, float)):
             return None
         return float(value)
