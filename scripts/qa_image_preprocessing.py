@@ -58,19 +58,19 @@ def main() -> int:
     #   bias = 10
     #   dark current = 2 e-/s
     #   dark = 10 + 2*30 = 70
-    #   flat = 50 + 70 = 120  (uniform illumination 50 * response 1.0)
+    #   pixflat = 50 + 70 = 120  (uniform illumination 50 * response 1.0)
     #   science = 100 + 70 = 170 (signal 100 * response 1.0)
 
     with tempfile.TemporaryDirectory() as tmp:
         sci_path = os.path.join(tmp, "science.fits")
         bias_path = os.path.join(tmp, "bias.fits")
         dark_path = os.path.join(tmp, "dark.fits")
-        flat_path = os.path.join(tmp, "flat.fits")
+        pixflat_path = os.path.join(tmp, "pixflat.fits")
         out_path = os.path.join(tmp, "output.fits")
 
         _generate_mock_fits(bias_path, shape, base_value=10.0, exptime=1.0)
         _generate_mock_fits(dark_path, shape, base_value=70.0, exptime=30.0)
-        _generate_mock_fits(flat_path, shape, base_value=120.0, exptime=30.0)
+        _generate_mock_fits(pixflat_path, shape, base_value=120.0, exptime=30.0)
         _generate_mock_fits(sci_path, shape, base_value=170.0, exptime=30.0, cr_spike=True)
 
         print("Running image_preprocessing orchestrator...")
@@ -78,7 +78,7 @@ def main() -> int:
             input_path=sci_path,
             bias_path=bias_path,
             dark_path=dark_path,
-            flat_path=flat_path,
+            pixflat_path=pixflat_path,
             output_path=out_path,
             remove_cosmic_rays=True,
             update_header={"OBJECT": "QA_TEST", "TELESCOP": "Mock"},
@@ -109,7 +109,7 @@ def main() -> int:
         assert header.get("CALIBRAT") is not None, "Missing CALIBRAT keyword"
         assert header.get("MBIAS") is not None, "Missing MBIAS keyword"
         assert header.get("MDARK") is not None, "Missing MDARK keyword"
-        assert header.get("MFLAT") is not None, "Missing MFLAT keyword"
+        assert header.get("MPIXFLT") is not None, "Missing MPIXFLT keyword"
         assert header.get("OBJECT") == "QA_TEST", f"OBJECT mismatch: {header.get('OBJECT')}"
         assert header.get("TELESCOP") == "Mock", f"TELESCOP mismatch: {header.get('TELESCOP')}"
         print(f"[OK] Header provenance keywords present")
@@ -118,7 +118,7 @@ def main() -> int:
         history = [str(h) for h in header.get("HISTORY", [])]
         assert any("bias" in h.lower() for h in history), "Missing bias HISTORY"
         assert any("dark" in h.lower() for h in history), "Missing dark HISTORY"
-        assert any("flat" in h.lower() for h in history), "Missing flat HISTORY"
+        assert any("pixflat" in h.lower() for h in history), "Missing pixflat HISTORY"
         print(f"[OK] HISTORY entries present")
 
         print("\n============================================")
