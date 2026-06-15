@@ -30,7 +30,7 @@ def configure_logging(
         fmt: Log record format string.
     """
     # Configure the root logger for the data reduction pipeline
-    root_logger = logging.getLogger("amasedrp")
+    root_logger: logging.Logger = logging.getLogger("amasedrp")
     root_logger.setLevel(level)
 
     abs_log_file = os.path.abspath(os.path.expanduser(log_file))

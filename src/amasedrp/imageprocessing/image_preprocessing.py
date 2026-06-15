@@ -15,7 +15,7 @@ from typing import Any
 
 from ..utils.logging import configure_logging
 from .core.image import Image
-from .methods import bias, dark, flat
+from .methods import bias, cosmic, dark, flat
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -71,7 +71,7 @@ def _warn_if_already_calibrated(header: Any) -> None:
 # ---------------------------------------------------------------------------
 
 
-def image_calibration(
+def _image_calibration(
     input_image: Image,
     master_bias_image: Image,
     master_dark_image: Image,
@@ -197,11 +197,13 @@ def image_preprocessing(
     steps: tuple[str, ...] = ("bias", "dark", "pixflat"),
     update_header: dict[str, Any] | None = None,
     log_file: str | None = None,
+    cosmic_removal: bool = False,
+    **cr_kwargs: Any,
 ) -> Image:
-    """Read, calibrate, and persist a science image.
+    """Image preprocessing: calibration (incl. bias, dark, pixel flat) + cosmic ray removal.
 
     High-level orchestrator that reads master calibration frames and a
-    science frame from disk, runs ``image_calibration``, writes the
+    science frame from disk, runs ``_image_calibration``, writes the
     result to a FITS file, and returns the calibrated ``Image`` object.
 
     Args:
@@ -213,7 +215,7 @@ def image_preprocessing(
         steps: Calibration steps to apply.
         update_header: Optional dictionary of FITS header keywords to
             write into the output file (in addition to the provenance
-            keywords set by ``image_calibration``).
+            keywords set by ``_image_calibration``).
         log_file: Optional path to a log file. If provided, the
             preprocessing module logger is configured to write *INFO*
             and *WARNING* messages to this file.
@@ -221,21 +223,29 @@ def image_preprocessing(
     Returns:
         The calibrated ``Image`` object.
     """
+    # -- configure logging ------------------------------------------------------
     if log_file is not None:
         configure_logging(log_file)
 
-    input_image = Image.from_fits(input_path)
-    master_bias = Image.from_fits(bias_path)
-    master_dark = Image.from_fits(dark_path)
-    master_pixflat = Image.from_fits(pixflat_path)
+    # -- read input and master frames ------------------------------------------------
+    input_image: Image = Image.from_fits(input_path)
+    master_bias: Image = Image.from_fits(bias_path)
+    master_dark: Image = Image.from_fits(dark_path)
+    master_pixflat: Image = Image.from_fits(pixflat_path)
 
-    output = image_calibration(
+    # -- apply calibration steps -----------------------------------------------
+    output: Image = _image_calibration(
         input_image=input_image,
         master_bias_image=master_bias,
         master_dark_image=master_dark,
         master_pixflat_image=master_pixflat,
         steps=steps,
     )
+
+    # cosmic ray removal
+    # NOTE: check whether it should be always applied after calibration
+    if cosmic_removal:
+        output = cosmic.remove_cosmic_rays(output, **cr_kwargs)
 
     output.write_to_fits(output_path, update_header=update_header)
     return output
