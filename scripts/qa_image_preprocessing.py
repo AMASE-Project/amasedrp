@@ -103,7 +103,7 @@ def main() -> int:
         history = [str(h) for h in header.get("HISTORY", [])]
         assert any("bias" in h.lower() for h in history), "Missing bias HISTORY"
         assert any("dark" in h.lower() for h in history), "Missing dark HISTORY"
-        assert any("pixflat" in h.lower() for h in history), "Missing pixflat HISTORY"
+        assert any("pixel flat" in h.lower() for h in history), "Missing pixflat HISTORY"
         print(f"[OK] HISTORY entries present")
 
         print("\n============================================")

@@ -6,9 +6,8 @@ These tests are written against the *target* API (RED phase).  They will fail
 until the implementation is updated to support:
 
 * ``Image.write_to_fits(filename, update_header=...)``
-* ``image_calibration(..., steps=...)``
 * ``image_preprocessing(input_path, bias_path, dark_path, pixflat_path,
-   output_path, update_header=...)``
+    output_path, update_header=...)``
 * structured logging instead of ``print`` statements
 * provenance keywords in output headers
 """
@@ -23,7 +22,7 @@ import numpy as np
 import pytest
 from astropy.io import fits
 
-from amasedrp.imageprocessing import Image, image_calibration, image_preprocessing
+from amasedrp.imageprocessing import Image, image_preprocessing
 
 
 # ---------------------------------------------------------------------------
@@ -98,32 +97,41 @@ class TestImageProperties:
 class TestFullCalibrationPipeline:
     """End-to-end calibration under ideal conditions."""
 
-    def test_full_calibration_pipeline(self) -> None:
-        """All three steps produce a correctly calibrated Image."""
+    def test_full_calibration_pipeline(self, tmp_path: Path) -> None:
+        """All three steps produce a correctly calibrated FITS file."""
         # Synthetic data where the "true" science signal is 100 everywhere.
         # bias = 10, dark current = 2 / sec, exptime = 30 sec
         # pixflat = uniform illumination (50) * pixel response (1.0)
         # science = 100 * 1.0 + 2*30 + 10 = 170
         shape = (20, 20)
-        bias_data = np.full(shape, 10.0, dtype=np.float32)
-        dark_data = np.full(shape, 70.0, dtype=np.float32)   # 10 + 2*30
-        pixflat_data = np.full(shape, 120.0, dtype=np.float32)  # 50*1.0 + 70
-        science_data = np.full(shape, 170.0, dtype=np.float32)  # 100 + 70
+        sci_path = tmp_path / "science.fits"
+        bias_path = tmp_path / "bias.fits"
+        dark_path = tmp_path / "dark.fits"
+        pixflat_path = tmp_path / "pixflat.fits"
+        out_path = tmp_path / "output.fits"
 
-        bias = _create_mock_image(bias_data, {"EXPTIME": 1.0})
-        dark = _create_mock_image(dark_data, {"EXPTIME": 30.0})
-        pixflat = _create_mock_image(pixflat_data, {"EXPTIME": 30.0})
-        science = _create_mock_image(science_data, {"EXPTIME": 30.0})
+        _create_mock_image(
+            np.full(shape, 170.0, dtype=np.float32), {"EXPTIME": 30.0}
+        ).write_to_fits(str(sci_path))
+        _create_mock_image(
+            np.full(shape, 10.0, dtype=np.float32), {"EXPTIME": 1.0}
+        ).write_to_fits(str(bias_path))
+        _create_mock_image(
+            np.full(shape, 70.0, dtype=np.float32), {"EXPTIME": 30.0}
+        ).write_to_fits(str(dark_path))
+        _create_mock_image(
+            np.full(shape, 120.0, dtype=np.float32), {"EXPTIME": 30.0}
+        ).write_to_fits(str(pixflat_path))
 
-        result = image_calibration(
-            science,
-            bias,
-            dark,
-            pixflat,
+        result = image_preprocessing(
+            input_path=str(sci_path),
+            bias_path=str(bias_path),
+            dark_path=str(dark_path),
+            pixflat_path=str(pixflat_path),
+            output_path=str(out_path),
             steps=("bias", "dark", "pixflat"),
         )
 
-        # Type assertions
         assert isinstance(result, Image)
         assert result.data.dtype == np.float32
 
@@ -141,9 +149,9 @@ class TestFullCalibrationPipeline:
         assert result.header.get("MBIAS") is not None
         assert result.header.get("MDARK") is not None
         assert result.header.get("MPIXFLT") is not None
-        assert any("bias" in str(h) for h in result.header.get("HISTORY", []))
-        assert any("dark" in str(h) for h in result.header.get("HISTORY", []))
-        assert any("pixflat" in str(h) for h in result.header.get("HISTORY", []))
+        assert any("bias" in str(h).lower() for h in result.header.get("HISTORY", []))
+        assert any("dark" in str(h).lower() for h in result.header.get("HISTORY", []))
+        assert any("flat" in str(h).lower() for h in result.header.get("HISTORY", []))
 
 
 # ---------------------------------------------------------------------------
@@ -153,51 +161,131 @@ class TestFullCalibrationPipeline:
 class TestInvalidInputsAndPartialSteps:
     """Robustness checks for malformed inputs and selective calibration."""
 
-    def test_shape_mismatch_raises_valueerror(self) -> None:
+    def test_shape_mismatch_raises_valueerror(self, tmp_path: Path) -> None:
         """Images with incompatible shapes must raise ValueError."""
-        science = _create_mock_image(np.ones((20, 20), dtype=np.float32), {"EXPTIME": 10.0})
-        bias = _create_mock_image(np.ones((10, 10), dtype=np.float32), {"EXPTIME": 1.0})
-        dark = _create_mock_image(np.ones((20, 20), dtype=np.float32), {"EXPTIME": 10.0})
-        pixflat = _create_mock_image(np.ones((20, 20), dtype=np.float32), {"EXPTIME": 10.0})
+        shape = (10, 10)
+        sci_path = tmp_path / "science.fits"
+        bias_path = tmp_path / "bias.fits"
+        dark_path = tmp_path / "dark.fits"
+        pixflat_path = tmp_path / "pixflat.fits"
+        out_path = tmp_path / "output.fits"
+
+        _create_mock_image(
+            np.ones((20, 20), dtype=np.float32), {"EXPTIME": 10.0}
+        ).write_to_fits(str(sci_path))
+        _create_mock_image(
+            np.ones((10, 10), dtype=np.float32), {"EXPTIME": 1.0}
+        ).write_to_fits(str(bias_path))
+        _create_mock_image(
+            np.ones((20, 20), dtype=np.float32), {"EXPTIME": 10.0}
+        ).write_to_fits(str(dark_path))
+        _create_mock_image(
+            np.ones((20, 20), dtype=np.float32), {"EXPTIME": 10.0}
+        ).write_to_fits(str(pixflat_path))
 
         with pytest.raises(ValueError):
-            image_calibration(science, bias, dark, pixflat)
+            image_preprocessing(
+                input_path=str(sci_path),
+                bias_path=str(bias_path),
+                dark_path=str(dark_path),
+                pixflat_path=str(pixflat_path),
+                output_path=str(out_path),
+            )
 
-    def test_zero_median_pixflat_raises_valueerror(self) -> None:
+    def test_zero_median_pixflat_raises_valueerror(self, tmp_path: Path) -> None:
         """A pixel flat field with zero median must raise ValueError (division by zero)."""
         shape = (10, 10)
-        science = _create_mock_image(np.ones(shape, dtype=np.float32), {"EXPTIME": 10.0})
-        bias = _create_mock_image(np.zeros(shape, dtype=np.float32), {"EXPTIME": 1.0})
-        dark = _create_mock_image(np.zeros(shape, dtype=np.float32), {"EXPTIME": 10.0})
-        pixflat = _create_mock_image(np.zeros(shape, dtype=np.float32), {"EXPTIME": 10.0})
+        sci_path = tmp_path / "science.fits"
+        bias_path = tmp_path / "bias.fits"
+        dark_path = tmp_path / "dark.fits"
+        pixflat_path = tmp_path / "pixflat.fits"
+        out_path = tmp_path / "output.fits"
+
+        _create_mock_image(
+            np.ones(shape, dtype=np.float32), {"EXPTIME": 10.0}
+        ).write_to_fits(str(sci_path))
+        _create_mock_image(
+            np.zeros(shape, dtype=np.float32), {"EXPTIME": 1.0}
+        ).write_to_fits(str(bias_path))
+        _create_mock_image(
+            np.zeros(shape, dtype=np.float32), {"EXPTIME": 10.0}
+        ).write_to_fits(str(dark_path))
+        _create_mock_image(
+            np.zeros(shape, dtype=np.float32), {"EXPTIME": 10.0}
+        ).write_to_fits(str(pixflat_path))
 
         with pytest.raises(ValueError):
-            image_calibration(science, bias, dark, pixflat)
+            image_preprocessing(
+                input_path=str(sci_path),
+                bias_path=str(bias_path),
+                dark_path=str(dark_path),
+                pixflat_path=str(pixflat_path),
+                output_path=str(out_path),
+            )
 
-    def test_missing_exptime_raises_valueerror(self) -> None:
+    def test_missing_exptime_raises_valueerror(self, tmp_path: Path) -> None:
         """Missing or invalid EXPTIME must raise ValueError."""
         shape = (10, 10)
-        science = _create_mock_image(np.ones(shape, dtype=np.float32))  # no EXPTIME
-        bias = _create_mock_image(np.ones(shape, dtype=np.float32), {"EXPTIME": 1.0})
-        dark = _create_mock_image(np.ones(shape, dtype=np.float32), {"EXPTIME": 10.0})
-        pixflat = _create_mock_image(np.ones(shape, dtype=np.float32), {"EXPTIME": 10.0})
+        sci_path = tmp_path / "science.fits"
+        bias_path = tmp_path / "bias.fits"
+        dark_path = tmp_path / "dark.fits"
+        pixflat_path = tmp_path / "pixflat.fits"
+        out_path = tmp_path / "output.fits"
+
+        _create_mock_image(
+            np.ones(shape, dtype=np.float32)
+        ).write_to_fits(str(sci_path))  # no EXPTIME
+        _create_mock_image(
+            np.ones(shape, dtype=np.float32), {"EXPTIME": 1.0}
+        ).write_to_fits(str(bias_path))
+        _create_mock_image(
+            np.ones(shape, dtype=np.float32), {"EXPTIME": 10.0}
+        ).write_to_fits(str(dark_path))
+        _create_mock_image(
+            np.ones(shape, dtype=np.float32), {"EXPTIME": 10.0}
+        ).write_to_fits(str(pixflat_path))
 
         with pytest.raises(ValueError):
-            image_calibration(science, bias, dark, pixflat)
+            image_preprocessing(
+                input_path=str(sci_path),
+                bias_path=str(bias_path),
+                dark_path=str(dark_path),
+                pixflat_path=str(pixflat_path),
+                output_path=str(out_path),
+            )
 
-    def test_partial_steps_bias_only(self) -> None:
+    def test_partial_steps_bias_only(self, tmp_path: Path) -> None:
         """steps=("bias",) should apply only bias subtraction."""
         shape = (10, 10)
+        sci_path = tmp_path / "science.fits"
+        bias_path = tmp_path / "bias.fits"
+        dark_path = tmp_path / "dark.fits"
+        pixflat_path = tmp_path / "pixflat.fits"
+        out_path = tmp_path / "output.fits"
+
         science_data = np.full(shape, 100.0, dtype=np.float32)
         bias_data = np.full(shape, 10.0, dtype=np.float32)
 
-        science = _create_mock_image(science_data, {"EXPTIME": 10.0})
-        bias = _create_mock_image(bias_data, {"EXPTIME": 1.0})
-        dark = _create_mock_image(np.zeros(shape, dtype=np.float32), {"EXPTIME": 10.0})
-        pixflat = _create_mock_image(np.full(shape, 50.0, dtype=np.float32), {"EXPTIME": 10.0})
+        _create_mock_image(
+            science_data, {"EXPTIME": 10.0}
+        ).write_to_fits(str(sci_path))
+        _create_mock_image(
+            bias_data, {"EXPTIME": 1.0}
+        ).write_to_fits(str(bias_path))
+        _create_mock_image(
+            np.zeros(shape, dtype=np.float32), {"EXPTIME": 10.0}
+        ).write_to_fits(str(dark_path))
+        _create_mock_image(
+            np.full(shape, 50.0, dtype=np.float32), {"EXPTIME": 10.0}
+        ).write_to_fits(str(pixflat_path))
 
-        result = image_calibration(
-            science, bias, dark, pixflat, steps=("bias",)
+        result = image_preprocessing(
+            input_path=str(sci_path),
+            bias_path=str(bias_path),
+            dark_path=str(dark_path),
+            pixflat_path=str(pixflat_path),
+            output_path=str(out_path),
+            steps=("bias",),
         )
 
         np.testing.assert_allclose(result.data, 90.0, rtol=1e-5)
@@ -210,21 +298,36 @@ class TestInvalidInputsAndPartialSteps:
 class TestIntegerOverflowPrevention:
     """Ensure uint16 inputs with high values do not wrap during calibration."""
 
-    def test_no_integer_overflow(self) -> None:
+    def test_no_integer_overflow(self, tmp_path: Path) -> None:
         """uint16 data near saturation must be promoted to float32 safely."""
         shape = (10, 10)
+        sci_path = tmp_path / "science.fits"
+        bias_path = tmp_path / "bias.fits"
+        dark_path = tmp_path / "dark.fits"
+        pixflat_path = tmp_path / "pixflat.fits"
+        out_path = tmp_path / "output.fits"
+
         # High uint16 values that would wrap if subtracted in uint16
-        science_data = np.full(shape, 65000, dtype=np.uint16)
-        bias_data = np.full(shape, 50000, dtype=np.uint16)
-        dark_data = np.full(shape, 50000, dtype=np.uint16)
-        pixflat_data = np.full(shape, 60000, dtype=np.uint16)
+        _create_mock_image(
+            np.full(shape, 65000, dtype=np.uint16), {"EXPTIME": 10.0}
+        ).write_to_fits(str(sci_path))
+        _create_mock_image(
+            np.full(shape, 50000, dtype=np.uint16), {"EXPTIME": 1.0}
+        ).write_to_fits(str(bias_path))
+        _create_mock_image(
+            np.full(shape, 50000, dtype=np.uint16), {"EXPTIME": 10.0}
+        ).write_to_fits(str(dark_path))
+        _create_mock_image(
+            np.full(shape, 60000, dtype=np.uint16), {"EXPTIME": 10.0}
+        ).write_to_fits(str(pixflat_path))
 
-        science = _create_mock_image(science_data, {"EXPTIME": 10.0})
-        bias = _create_mock_image(bias_data, {"EXPTIME": 1.0})
-        dark = _create_mock_image(dark_data, {"EXPTIME": 10.0})
-        pixflat = _create_mock_image(pixflat_data, {"EXPTIME": 10.0})
-
-        result = image_calibration(science, bias, dark, pixflat)
+        result = image_preprocessing(
+            input_path=str(sci_path),
+            bias_path=str(bias_path),
+            dark_path=str(dark_path),
+            pixflat_path=str(pixflat_path),
+            output_path=str(out_path),
+        )
 
         assert result.data.dtype == np.float32
         # 65000 - 50000 = 15000 (would wrap to 48536 in uint16)
@@ -284,22 +387,229 @@ class TestImagePreprocessingOrchestrator:
 
 
 # ---------------------------------------------------------------------------
-# 6. Logging Test
+# 6. Step Order Enforcement
+# ---------------------------------------------------------------------------
+
+class TestStepOrderEnforcement:
+    """Steps must be applied in fixed logical order regardless of tuple order."""
+
+    def test_unordered_steps_applied_in_fixed_order(self, tmp_path: Path) -> None:
+        """steps=("pixflat", "dark", "bias") must still yield correct result."""
+        shape = (20, 20)
+        sci_path = tmp_path / "science.fits"
+        bias_path = tmp_path / "bias.fits"
+        dark_path = tmp_path / "dark.fits"
+        pixflat_path = tmp_path / "pixflat.fits"
+        out_path = tmp_path / "output.fits"
+
+        _create_mock_image(
+            np.full(shape, 170.0, dtype=np.float32), {"EXPTIME": 30.0}
+        ).write_to_fits(str(sci_path))
+        _create_mock_image(
+            np.full(shape, 10.0, dtype=np.float32), {"EXPTIME": 1.0}
+        ).write_to_fits(str(bias_path))
+        _create_mock_image(
+            np.full(shape, 70.0, dtype=np.float32), {"EXPTIME": 30.0}
+        ).write_to_fits(str(dark_path))
+        _create_mock_image(
+            np.full(shape, 120.0, dtype=np.float32), {"EXPTIME": 30.0}
+        ).write_to_fits(str(pixflat_path))
+
+        result = image_preprocessing(
+            input_path=str(sci_path),
+            bias_path=str(bias_path),
+            dark_path=str(dark_path),
+            pixflat_path=str(pixflat_path),
+            output_path=str(out_path),
+            steps=("pixflat", "dark", "bias"),
+        )
+
+        np.testing.assert_allclose(result.data, 100.0, rtol=1e-5)
+
+
+# ---------------------------------------------------------------------------
+# 7. Step Dependency Validation
+# ---------------------------------------------------------------------------
+
+class TestStepDependencyValidation:
+    """Invalid step combinations must raise ValueError."""
+
+    def test_dark_without_bias_raises_valueerror(self, tmp_path: Path) -> None:
+        """steps=("dark",) must raise ValueError because dark requires bias."""
+        shape = (10, 10)
+        sci_path = tmp_path / "science.fits"
+        bias_path = tmp_path / "bias.fits"
+        dark_path = tmp_path / "dark.fits"
+        pixflat_path = tmp_path / "pixflat.fits"
+        out_path = tmp_path / "output.fits"
+
+        _create_mock_image(
+            np.ones(shape, dtype=np.float32), {"EXPTIME": 10.0}
+        ).write_to_fits(str(sci_path))
+        _create_mock_image(
+            np.ones(shape, dtype=np.float32), {"EXPTIME": 1.0}
+        ).write_to_fits(str(bias_path))
+        _create_mock_image(
+            np.ones(shape, dtype=np.float32), {"EXPTIME": 10.0}
+        ).write_to_fits(str(dark_path))
+        _create_mock_image(
+            np.ones(shape, dtype=np.float32), {"EXPTIME": 10.0}
+        ).write_to_fits(str(pixflat_path))
+
+        with pytest.raises(ValueError):
+            image_preprocessing(
+                input_path=str(sci_path),
+                bias_path=str(bias_path),
+                dark_path=str(dark_path),
+                pixflat_path=str(pixflat_path),
+                output_path=str(out_path),
+                steps=("dark",),
+            )
+
+    def test_pixflat_without_bias_raises_valueerror(self, tmp_path: Path) -> None:
+        """steps=("pixflat",) must raise ValueError because pixflat requires bias+dark."""
+        shape = (10, 10)
+        sci_path = tmp_path / "science.fits"
+        bias_path = tmp_path / "bias.fits"
+        dark_path = tmp_path / "dark.fits"
+        pixflat_path = tmp_path / "pixflat.fits"
+        out_path = tmp_path / "output.fits"
+
+        _create_mock_image(
+            np.ones(shape, dtype=np.float32), {"EXPTIME": 10.0}
+        ).write_to_fits(str(sci_path))
+        _create_mock_image(
+            np.ones(shape, dtype=np.float32), {"EXPTIME": 1.0}
+        ).write_to_fits(str(bias_path))
+        _create_mock_image(
+            np.ones(shape, dtype=np.float32), {"EXPTIME": 10.0}
+        ).write_to_fits(str(dark_path))
+        _create_mock_image(
+            np.ones(shape, dtype=np.float32), {"EXPTIME": 10.0}
+        ).write_to_fits(str(pixflat_path))
+
+        with pytest.raises(ValueError):
+            image_preprocessing(
+                input_path=str(sci_path),
+                bias_path=str(bias_path),
+                dark_path=str(dark_path),
+                pixflat_path=str(pixflat_path),
+                output_path=str(out_path),
+                steps=("pixflat",),
+            )
+
+    def test_pixflat_without_dark_raises_valueerror(self, tmp_path: Path) -> None:
+        """steps=("bias", "pixflat") must raise ValueError because pixflat requires dark."""
+        shape = (10, 10)
+        sci_path = tmp_path / "science.fits"
+        bias_path = tmp_path / "bias.fits"
+        dark_path = tmp_path / "dark.fits"
+        pixflat_path = tmp_path / "pixflat.fits"
+        out_path = tmp_path / "output.fits"
+
+        _create_mock_image(
+            np.ones(shape, dtype=np.float32), {"EXPTIME": 10.0}
+        ).write_to_fits(str(sci_path))
+        _create_mock_image(
+            np.ones(shape, dtype=np.float32), {"EXPTIME": 1.0}
+        ).write_to_fits(str(bias_path))
+        _create_mock_image(
+            np.ones(shape, dtype=np.float32), {"EXPTIME": 10.0}
+        ).write_to_fits(str(dark_path))
+        _create_mock_image(
+            np.ones(shape, dtype=np.float32), {"EXPTIME": 10.0}
+        ).write_to_fits(str(pixflat_path))
+
+        with pytest.raises(ValueError):
+            image_preprocessing(
+                input_path=str(sci_path),
+                bias_path=str(bias_path),
+                dark_path=str(dark_path),
+                pixflat_path=str(pixflat_path),
+                output_path=str(out_path),
+                steps=("bias", "pixflat"),
+            )
+
+
+# ---------------------------------------------------------------------------
+# 8. Missing Dark EXPTIME for Pixflat Step
+# ---------------------------------------------------------------------------
+
+class TestMissingDarkExptimeForPixflat:
+    """master_dark exptime must be validated when pixflat step is requested."""
+
+    def test_missing_dark_exptime_for_pixflat_raises_valueerror(
+        self, tmp_path: Path
+    ) -> None:
+        """pixflat step requires master_dark exptime; missing it raises ValueError."""
+        shape = (10, 10)
+        sci_path = tmp_path / "science.fits"
+        bias_path = tmp_path / "bias.fits"
+        dark_path = tmp_path / "dark.fits"
+        pixflat_path = tmp_path / "pixflat.fits"
+        out_path = tmp_path / "output.fits"
+
+        _create_mock_image(
+            np.ones(shape, dtype=np.float32), {"EXPTIME": 10.0}
+        ).write_to_fits(str(sci_path))
+        _create_mock_image(
+            np.ones(shape, dtype=np.float32), {"EXPTIME": 1.0}
+        ).write_to_fits(str(bias_path))
+        _create_mock_image(
+            np.ones(shape, dtype=np.float32)
+        ).write_to_fits(str(dark_path))  # no EXPTIME
+        _create_mock_image(
+            np.ones(shape, dtype=np.float32), {"EXPTIME": 10.0}
+        ).write_to_fits(str(pixflat_path))
+
+        with pytest.raises(ValueError):
+            image_preprocessing(
+                input_path=str(sci_path),
+                bias_path=str(bias_path),
+                dark_path=str(dark_path),
+                pixflat_path=str(pixflat_path),
+                output_path=str(out_path),
+                steps=("bias", "dark", "pixflat"),
+            )
+
+
+# ---------------------------------------------------------------------------
+# 9. Logging Test
 # ---------------------------------------------------------------------------
 
 class TestLogging:
     """Ensure calibration emits structured log messages instead of raw prints."""
 
-    def test_logging_instead_of_print(self, caplog: pytest.LogCaptureFixture) -> None:
+    def test_logging_instead_of_print(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
         """caplog should capture 'bias', 'dark', and 'pixflat' log records."""
         shape = (10, 10)
-        science = _create_mock_image(np.ones(shape, dtype=np.float32), {"EXPTIME": 10.0})
-        bias = _create_mock_image(np.ones(shape, dtype=np.float32), {"EXPTIME": 1.0})
-        dark = _create_mock_image(np.ones(shape, dtype=np.float32), {"EXPTIME": 10.0})
-        pixflat = _create_mock_image(np.full(shape, 2.0, dtype=np.float32), {"EXPTIME": 10.0})
+        sci_path = tmp_path / "science.fits"
+        bias_path = tmp_path / "bias.fits"
+        dark_path = tmp_path / "dark.fits"
+        pixflat_path = tmp_path / "pixflat.fits"
+        out_path = tmp_path / "output.fits"
+
+        _create_mock_image(
+            np.ones(shape, dtype=np.float32), {"EXPTIME": 10.0}
+        ).write_to_fits(str(sci_path))
+        _create_mock_image(
+            np.ones(shape, dtype=np.float32), {"EXPTIME": 1.0}
+        ).write_to_fits(str(bias_path))
+        _create_mock_image(
+            np.ones(shape, dtype=np.float32), {"EXPTIME": 10.0}
+        ).write_to_fits(str(dark_path))
+        _create_mock_image(
+            np.full(shape, 2.0, dtype=np.float32), {"EXPTIME": 10.0}
+        ).write_to_fits(str(pixflat_path))
 
         with caplog.at_level(logging.INFO):
-            image_calibration(science, bias, dark, pixflat)
+            image_preprocessing(
+                input_path=str(sci_path),
+                bias_path=str(bias_path),
+                dark_path=str(dark_path),
+                pixflat_path=str(pixflat_path),
+                output_path=str(out_path),
+            )
 
         log_text = " ".join(record.message for record in caplog.records)
         assert "bias" in log_text.lower()

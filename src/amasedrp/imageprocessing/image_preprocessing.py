@@ -132,6 +132,21 @@ def _image_calibration(
             f"Invalid step(s) {invalid}. Valid steps are: {tuple(_VALID_STEPS)}"
         )
 
+    # -- enforce step dependencies ---------------------------------------------
+    # Dark subtraction requires bias to be removed first.
+    if "dark" in steps and "bias" not in steps:
+        raise ValueError(
+            'Step "dark" requires step "bias". '
+            "Dark frame contains bias and must have bias subtracted first."
+        )
+    # Pixel flat-field requires both bias and dark to be removed first.
+    if "pixflat" in steps and ("bias" not in steps or "dark" not in steps):
+        raise ValueError(
+            'Step "pixflat" requires steps "bias" and "dark". '
+            "Pixel flat field contains bias and dark current, "
+            "which must be removed before computing pixel response."
+        )
+
     # -- build the list of images that are *actually* required ----------------
     # Bias is always needed because even dark/flat frames contain bias.
     required: list[tuple[str, Image]] = [
@@ -156,6 +171,11 @@ def _image_calibration(
         _validate_exptime(
             master_pixflat_image, "master_pixflat_image", "pixel flat-field correction"
         )
+        # pixflat step internally uses master_dark to compute dark current,
+        # so master_dark must also have a valid exposure time.
+        _validate_exptime(
+            master_dark_image, "master_dark_image", "pixel flat-field correction"
+        )
 
     # -- prepare working copy -------------------------------------------------
     output_image: Image = input_image.copy()
@@ -163,7 +183,10 @@ def _image_calibration(
     # arithmetic on unsigned-integer master frames.
     output_image.data = output_image.data.astype("float32")
 
-    # -- apply calibration steps -----------------------------------------------
+    # -- apply calibration steps in fixed logical order ------------------------
+    ordered_steps: list[str] = [
+        s for s in ("bias", "dark", "pixflat") if s in set(steps)
+    ]
     step_dispatch: dict[str, Any] = {
         "bias": lambda img: bias.subtract_bias(img, master_bias_image),
         "dark": lambda img: dark.subtract_dark(
@@ -174,7 +197,7 @@ def _image_calibration(
         ),
     }
 
-    for step in steps:
+    for step in ordered_steps:
         logger.info(f"Applying {step} calibration...")
         output_image = step_dispatch[step](output_image)
         logger.info(f"{step} calibration applied.")

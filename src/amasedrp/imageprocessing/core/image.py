@@ -129,11 +129,11 @@ class Image:
         return value
 
     @property
-    def history(self) -> str | None:
+    def history(self) -> list[str] | None:
         value = self.header.get("HISTORY", default=None)
-        if value is None or not isinstance(value, str):
+        if value is None:
             return None
-        return value
+        return list(value)
 
     #########################################################################
     # utilities
