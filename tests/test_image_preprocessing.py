@@ -22,7 +22,7 @@ import numpy as np
 import pytest
 from astropy.io import fits
 
-from amasedrp.imageprocessing import Image, image_preprocessing
+from amasedrp.preprocessing import Image, image_preprocessing
 
 
 # ---------------------------------------------------------------------------

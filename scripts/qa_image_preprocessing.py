@@ -20,7 +20,7 @@ from astropy.io import fits
 # Ensure the package is importable when run standalone
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from amasedrp.imageprocessing import Image, image_preprocessing
+from amasedrp.preprocessing import Image, image_preprocessing
 
 
 def _generate_mock_fits(

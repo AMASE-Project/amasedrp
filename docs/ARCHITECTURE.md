@@ -16,7 +16,7 @@ This mirrors the scientist's mental model: **data → step-by-step operations �
 
 The DRP is organized into three consecutive stages that follow the natural data flow from raw detector frames to science-ready spectra:
 
-- **Stage 1: Image Pre-processing** — `imageprocessing/`  
+- **Stage 1: Image Pre-processing** — `preprocessing/`  
   Transform raw CMOS frames into calibrated 2D images (bias/dark/flat/cosmic).
 
 - **Stage 2: Spectral Data Reduction** — `reduction/`  
@@ -32,8 +32,8 @@ Each stage follows the same **Three-Part Module Pattern** (`core/` → `methods/
 ```
 src/amasedrp/
 │
-├── imageprocessing/          # Stage 1: Image Pre-processing
-│   ├── __init__.py           # Public API: `image_preprocessing`, `image_calibration`
+├── preprocessing/          # Stage 1: Image Pre-processing
+  │   ├── __init__.py           # Public API: `image_preprocessing`, `preprocessing`
 │   ├── core/                 # Data structures
 │   │   └── image.py          # Image container: data + FITS header + I/O
 │   ├── methods/              # Atomic processing steps
@@ -74,7 +74,7 @@ src/amasedrp/
 
 ## Module Anatomy
 
-Every functional module (`imageprocessing/`, `reduction/`, `calibration/`) follows the same internal layout:
+Every functional module (`preprocessing/`, `reduction/`, `calibration/`) follows the same internal layout:
 
 ### 1. `core/`
 
@@ -84,7 +84,7 @@ Every functional module (`imageprocessing/`, `reduction/`, `calibration/`) follo
   - Prefer `dataclass` or simple classes over complex OO hierarchies.
   - Use standard types (`np.ndarray`, `astropy.io.fits.Header`) for interoperability.
 
-**Example:** `imageprocessing/core/image.py`
+**Example:** `preprocessing/core/image.py`
 ```python
 class Image:
     def __init__(self, data, header, filename=None): ...
@@ -102,7 +102,7 @@ class Image:
   - One file = one step. Keep files small (< 100 lines).
   - No file I/O here. Operate on in-memory objects.
 
-**Example:** `imageprocessing/methods/bias.py`
+**Example:** `preprocessing/methods/bias.py`
 ```python
 def subtract_bias(image: Image, master_bias: Image) -> Image:
     result = image.copy()
@@ -118,7 +118,7 @@ def subtract_bias(image: Image, master_bias: Image) -> Image:
   - Validate inputs, orchestrate `methods/` in the correct order, log progress, write outputs.
   - Keep the public API surface small. Scientists call this one function.
 
-**Example:** `imageprocessing/image_preprocessing.py`
+**Example:** `preprocessing/image_preprocessing.py`
 ```python
 def image_calibration(input_image, master_bias, master_dark, master_pixflat, steps=("bias","dark","pixflat")):
     result = input_image.copy()
