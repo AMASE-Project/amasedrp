@@ -12,12 +12,27 @@ The project follows a **Three-Part Module Pattern** designed for clarity:
 
 This mirrors the scientist's mental model: **data → step-by-step operations → full workflow**. Modules are organized by **scientific function**, not by code type (classes vs. functions).
 
+## Pipeline Stages
+
+The DRP is organized into three consecutive stages that follow the natural data flow from raw detector frames to science-ready spectra:
+
+- **Stage 1: Image Pre-processing** — `imageprocessing/`  
+  Transform raw CMOS frames into calibrated 2D images (bias/dark/flat/cosmic).
+
+- **Stage 2: Spectral Data Reduction** — `reduction/`  
+  Transform calibrated 2D images into extracted 1D spectra (fiber tracing, boxcar/optimal extraction, spectro-perfectionism).
+
+- **Stage 3: Spectral Data Calibration** — `calibration/`  
+  Transform extracted spectra into wavelength-calibrated, sky-subtracted, flux-calibrated products (wavelength calibration, fiber flat-fielding, LSF modeling, sky subtraction, flux calibration, coaddition).
+
+Each stage follows the same **Three-Part Module Pattern** (`core/` → `methods/` → orchestrator).
+
 ## Directory Structure
 
 ```
 src/amasedrp/
 │
-├── imageprocessing/          # [IMAGE PROCESSING] CMOS detector level
+├── imageprocessing/          # Stage 1: Image Pre-processing
 │   ├── __init__.py           # Public API: `image_preprocessing`, `image_calibration`
 │   ├── core/                 # Data structures
 │   │   └── image.py          # Image container: data + FITS header + I/O
@@ -28,29 +43,25 @@ src/amasedrp/
 │   │   └── cosmic.py         # Cosmic ray detection & removal
 │   └── image_preprocessing.py # Main entry: orchestrates steps from methods/
 │
-├── reduction/                # [CORE REDUCTION] Full / quick pipeline
+├── reduction/                # Stage 2: Spectral Data Reduction
 │   ├── __init__.py           # Public API: `run_reduction`, `run_quick_reduction`
 │   ├── core/                 # Data structures
 │   │   ├── rss.py            # Row-Stacked Spectra data model
 │   │   └── fiber.py          # Fiber metadata container
 │   ├── methods/              # Atomic processing steps
-│   │   ├── extraction.py     # Spectral extraction (boxcar / optimal)
+│   │   ├── fiber_tracing.py  # Fiber identification & trace modeling
+│   │   └── extraction.py     # Spectral extraction (boxcar / optimal / spectro-perfectionism)
+│   └── reduction.py          # Stage 2 main entry: orchestrates spectral extraction
+│
+├── calibration/              # Stage 3: Master Calibration & Data Calibration
+│   ├── __init__.py
+│   ├── core/                 # Calibration-specific data models
+│   ├── methods/              # Calibration algorithms
+│   │   ├── fiberflat.py      # Fiber-to-fiber flat-field correction
 │   │   ├── wavelength.py     # Wavelength calibration
 │   │   ├── sky.py            # Sky background subtraction
 │   │   └── fluxcal.py        # Flux calibration
-│   └── reduction.py          # Main entry: orchestrates the full DRP
-│
-├── calibration/              # [CALIBRATION] Master frame generation & QC
-│   ├── __init__.py
-│   ├── core/                 # Calibration-specific data models
-│   ├── methods/              # Arc line fitting, LSF modeling, etc.
 │   └── calibration.py        # Main entry: master calibration builder
-│
-├── extraction/               # [SPECTRAL EXTRACTION] (to be merged into reduction/)
-│   ├── __init__.py
-│   ├── core/
-│   ├── methods/
-│   └── extraction.py
 │
 ├── utils/                    # [UTILITIES] Shared helpers
 │   ├── fits_io.py            # FITS read/write wrappers
