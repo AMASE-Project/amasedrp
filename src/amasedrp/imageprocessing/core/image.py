@@ -14,6 +14,8 @@ from typing import Any, Self
 import numpy as np
 from astropy.io import fits
 
+DEFAULT_GAIN = 1.0  # Default gain value in electrons/ADU (NOTE: check what it is for our CMOS camera)
+
 
 class Image:
     """
@@ -23,9 +25,13 @@ class Image:
     def __init__(
         self, data: np.ndarray, header: fits.Header, filename: str | None = None
     ) -> None:
-        self.data: np.ndarray = data
-        self.header: fits.Header = header
         self.filename: str | None = filename
+        self.header: fits.Header = header
+        self.ADU: np.ndarray = data.astype(np.float32)  # raw data in ADU
+        gain: float = self.gain if self.gain is not None else DEFAULT_GAIN
+        self.electrons: np.ndarray = self.ADU * gain
+        self.data: np.ndarray = self.electrons  # data for processing, in electrons
+        # NOTE: the error & mask systems are still under development
 
     ########################################################################
     # I/O
@@ -41,18 +47,6 @@ class Image:
             header: fits.Header = hdu.header
         return cls(data=data, header=header, filename=abs_filename)
 
-    # NOTE: When to use this method vs. `from_fits()`?
-    # NOTE: Maybe we can only keep `from_fits()`?
-    def read_from_fits(self, filename: str) -> None:
-        """Read the image from a FITS file."""
-        with fits.open(filename) as hdul:
-            hdu: fits.PrimaryHDU | Any = hdul[0]
-            data: np.ndarray = hdu.data
-            header: fits.Header = hdu.header
-        self.data = data
-        self.header = header
-        self.filename = filename
-
     def write_to_fits(
         self, filename: str, update_header: dict[str, Any] | None = None
     ) -> None:
@@ -67,7 +61,7 @@ class Image:
         header = self.header.copy() if update_header is not None else self.header
         if update_header is not None:
             header.update(update_header)
-        hdu = fits.PrimaryHDU(self.data, header=header)
+        hdu = fits.PrimaryHDU(self.ADU, header=header)
         hdu.writeto(filename, overwrite=True)
 
     ########################################################################
@@ -94,15 +88,8 @@ class Image:
 
     @property
     def rdnoise(self) -> float | None:
-        """Readout noise of the detector, in electrons.
-
-        The value is read from the ``RDNOISE`` keyword in the FITS header.
-
-        Returns:
-            float: The readout noise if the ``RDNOISE`` keyword is present and valid.
-            None: If the keyword is missing or has an invalid value.
-        """
-        # NOTE: what is our keyword for readout noise? check it.
+        """Readout noise of the detector, in electrons."""
+        # NOTE: what is our keyword for readout noise? check it. make sure it's in electrons, not ADU.
         value = self.header.get("RDNOISE", default=None)
         if value is None or not isinstance(value, (int, float)):
             return None
@@ -122,7 +109,7 @@ class Image:
     def copy(self) -> "Image":
         """Create a deep copy of the Image object."""
         return Image(
-            data=copy.deepcopy(self.data),
+            data=copy.deepcopy(self.ADU),
             header=copy.deepcopy(self.header),
             filename=self.filename,
         )
