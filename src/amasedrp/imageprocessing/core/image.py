@@ -2,7 +2,6 @@
 # -*-coding:utf-8 -*-
 """
 @File:         image.py
-@Time:         2026/04/09 15:48:04
 @Author:       Guangquan ZENG
 @Contact:      guangquan.zeng@outlook.com
 @Description:  Class for handling 2D CMOS image data.
@@ -14,9 +13,6 @@ from typing import Any, Self
 
 import numpy as np
 from astropy.io import fits
-from astroscrappy import (
-    detect_cosmics,  # type: ignore[import] Cython extension, not in type stubs
-)
 
 
 class Image:
@@ -143,26 +139,3 @@ class Image:
         ):
             raise ValueError("Cutout coordinates are out of bounds.")
         return self.data[y_start:y_end, x_start:x_end]
-
-    ########################################################################
-    # image processing
-    ########################################################################
-
-    def detect_cosmic_rays(self, **kwargs: Any) -> tuple[np.ndarray, np.ndarray]:
-        """
-        Detect cosmic rays in the image using the L.A.Cosmic algorithm,
-        based on Laplacian edge detection (van Dokkum 2001).
-
-        This method is designed to be efficient and fast, utilizing
-        the C/Cython implementation of `astroscrappy.detect_cosmics()`.
-
-        References:
-        - van Dokkum (2001):
-            https://iopscience.iop.org/article/10.1086/323894
-        - astroscrappy GitHub:
-            https://github.com/astropy/astroscrappy
-        - astroscrappy Docs:
-            https://astroscrappy.readthedocs.io/en/latest/api/astroscrappy.detect_cosmics.html
-        """
-        crmask, cleanarr = detect_cosmics(self.data, **kwargs)
-        return crmask, cleanarr
