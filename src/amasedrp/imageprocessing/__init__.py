@@ -1,4 +1,4 @@
-from .classes.image import Image
+from .core.image import Image
 from .image_preprocessing import image_calibration
 from .image_preprocessing import image_preprocessing
 

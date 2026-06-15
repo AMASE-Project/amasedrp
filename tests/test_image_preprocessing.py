@@ -6,7 +6,7 @@ These tests are written against the *target* API (RED phase).  They will fail
 until the implementation is updated to support:
 
 * ``Image.write_to_fits(filename, update_header=...)``
-* ``image_calibration(..., steps=..., remove_cosmic_rays=...)``
+* ``image_calibration(..., steps=...)``
 * ``image_preprocessing(input_path, bias_path, dark_path, pixflat_path,
    output_path, update_header=...)``
 * structured logging instead of ``print`` statements
@@ -59,21 +59,21 @@ def _create_mock_image(
 class TestImageProperties:
     """Tests for ``Image`` properties and I/O extensions."""
 
-    def test_readout_noise_present(self) -> None:
-        """RDNOISE in header -> readout_noise returns the correct float."""
+    def test_rdnoise_present(self) -> None:
+        """RDNOISE in header -> rdnoise returns the correct float."""
         img = _create_mock_image(
             data=np.ones((10, 10), dtype=np.float32),
             header_dict={"RDNOISE": 3.5},
         )
-        assert img.readout_noise == 3.5
-        assert isinstance(img.readout_noise, float)
+        assert img.rdnoise == 3.5
+        assert isinstance(img.rdnoise, float)
 
-    def test_readout_noise_missing(self) -> None:
-        """RDNOISE absent -> readout_noise is None."""
+    def test_rdnoise_missing(self) -> None:
+        """RDNOISE absent -> rdnoise is None."""
         img = _create_mock_image(
             data=np.ones((10, 10), dtype=np.float32),
         )
-        assert img.readout_noise is None
+        assert img.rdnoise is None
 
     def test_write_to_fits_with_update_header(self, tmp_path: Path) -> None:
         """write_to_fits accepts update_header and persists the keywords."""
@@ -99,7 +99,7 @@ class TestFullCalibrationPipeline:
     """End-to-end calibration under ideal conditions."""
 
     def test_full_calibration_pipeline(self) -> None:
-        """All three steps + CR removal produce a correctly calibrated Image."""
+        """All three steps produce a correctly calibrated Image."""
         # Synthetic data where the "true" science signal is 100 everywhere.
         # bias = 10, dark current = 2 / sec, exptime = 30 sec
         # pixflat = uniform illumination (50) * pixel response (1.0)
@@ -121,7 +121,6 @@ class TestFullCalibrationPipeline:
             dark,
             pixflat,
             steps=("bias", "dark", "pixflat"),
-            remove_cosmic_rays=True,
         )
 
         # Type assertions
@@ -198,7 +197,7 @@ class TestInvalidInputsAndPartialSteps:
         pixflat = _create_mock_image(np.full(shape, 50.0, dtype=np.float32), {"EXPTIME": 10.0})
 
         result = image_calibration(
-            science, bias, dark, pixflat, steps=("bias",), remove_cosmic_rays=False
+            science, bias, dark, pixflat, steps=("bias",)
         )
 
         np.testing.assert_allclose(result.data, 90.0, rtol=1e-5)

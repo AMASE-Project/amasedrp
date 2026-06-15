@@ -2,9 +2,9 @@
 # -*- coding: utf-8 -*-
 """Manual QA script for image_preprocessing end-to-end pipeline.
 
-Generates synthetic FITS frames (science with a cosmic ray spike, bias,
-dark, flat), runs the full ``image_preprocessing()`` orchestrator, and
-asserts correctness of the output data and header.
+Generates synthetic FITS frames (science, bias, dark, flat), runs the
+full ``image_preprocessing()`` orchestrator, and asserts correctness of
+the output data and header.
 """
 
 from __future__ import annotations
@@ -23,24 +23,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from amasedrp.imageprocessing import Image, image_preprocessing
 
 
-def _inject_cosmic_ray(data: np.ndarray, x: int, y: int, amplitude: float) -> np.ndarray:
-    """Inject a bright spike simulating a cosmic ray hit."""
-    data = data.copy()
-    data[y, x] = amplitude
-    return data
-
-
 def _generate_mock_fits(
     path: str,
     shape: tuple[int, int],
     base_value: float,
     exptime: float | None,
-    cr_spike: bool = False,
 ) -> None:
     """Write a synthetic FITS file to *path*."""
     data = np.full(shape, base_value, dtype=np.float32)
-    if cr_spike:
-        data = _inject_cosmic_ray(data, x=50, y=50, amplitude=50000.0)
 
     header = fits.Header()
     if exptime is not None:
@@ -71,7 +61,7 @@ def main() -> int:
         _generate_mock_fits(bias_path, shape, base_value=10.0, exptime=1.0)
         _generate_mock_fits(dark_path, shape, base_value=70.0, exptime=30.0)
         _generate_mock_fits(pixflat_path, shape, base_value=120.0, exptime=30.0)
-        _generate_mock_fits(sci_path, shape, base_value=170.0, exptime=30.0, cr_spike=True)
+        _generate_mock_fits(sci_path, shape, base_value=170.0, exptime=30.0)
 
         print("Running image_preprocessing orchestrator...")
         output = image_preprocessing(
@@ -80,7 +70,6 @@ def main() -> int:
             dark_path=dark_path,
             pixflat_path=pixflat_path,
             output_path=out_path,
-            remove_cosmic_rays=True,
             update_header={"OBJECT": "QA_TEST", "TELESCOP": "Mock"},
         )
 
@@ -100,10 +89,6 @@ def main() -> int:
         # Expected calibrated value = 100.0
         np.testing.assert_allclose(data, 100.0, rtol=1e-5)
         print(f"[OK] Calibrated values correct (expected 100.0)")
-
-        # Check cosmic ray spike is attenuated
-        assert data[50, 50] < 1000.0, f"CR spike not removed: {data[50, 50]}"
-        print(f"[OK] Cosmic ray spike attenuated: {data[50, 50]:.2f} < 1000")
 
         # Header provenance
         assert header.get("CALIBRAT") is not None, "Missing CALIBRAT keyword"
