@@ -9,6 +9,7 @@
 
 import copy
 import os
+import warnings
 from typing import Any, Self
 
 import numpy as np
@@ -23,15 +24,29 @@ class Image:
     """
 
     def __init__(
-        self, data: np.ndarray, header: fits.Header, filename: str | None = None
+        self,
+        data: np.ndarray,
+        header: fits.Header,
+        filename: str | None = None,
+        unit: str = "adu",
     ) -> None:
+        if unit not in ("adu", "electron"):
+            raise ValueError(f"unit must be 'adu' or 'electron', got {unit!r}")
         self.filename: str | None = filename
         self.header: fits.Header = header
-        self.ADU: np.ndarray = data.astype(np.float32)  # raw data in ADU
         gain: float = self.gain if self.gain is not None else DEFAULT_GAIN
-        self.electrons: np.ndarray = self.ADU * gain
-        self.data: np.ndarray = self.electrons  # data for processing, in electrons
-        # NOTE: the error & mask systems are still under development
+        if unit == "adu":
+            self.ADU: np.ndarray = data.astype(np.float32)
+            self.electrons: np.ndarray = self.ADU * gain
+        else:  # unit == "electron"
+            self.electrons: np.ndarray = data.astype(np.float32)
+            self.ADU: np.ndarray = self.electrons / gain
+        self.data: np.ndarray = self.electrons
+        self.header["BUNIT"] = unit
+        if np.any(self.data < 0.0):
+            warnings.warn(
+                "Image data contains negative values, which may indicate an issue with the data or the gain value."
+            )  # NOTE: Need to check if this is expected for our CMOS camera (e.g., due to bias subtraction) or if it indicates a problem.
 
     ########################################################################
     # I/O
@@ -39,18 +54,28 @@ class Image:
 
     @classmethod
     def from_fits(cls, filename: str) -> Self:
-        """Create an Image object by reading a FITS file."""
+        """Create an Image object by reading a FITS file.
+
+        The ``BUNIT`` header keyword is used to determine the physical unit of
+        the data array.  If absent, the data is assumed to be in ADU.
+        """
         abs_filename = os.path.abspath(os.path.expanduser(filename))
         with fits.open(abs_filename) as hdul:
             hdu: fits.PrimaryHDU | Any = hdul[0]
             data: np.ndarray = hdu.data
             header: fits.Header = hdu.header
-        return cls(data=data, header=header, filename=abs_filename)
+        unit = header.get("BUNIT", "adu").lower()  # type: ignore[assignment]
+        if unit not in ("adu", "electron"):
+            unit = "adu"
+        return cls(data=data, header=header, filename=abs_filename, unit=unit)
 
     def write_to_fits(
         self, filename: str, update_header: dict[str, Any] | None = None
     ) -> None:
         """Write the image to a FITS file.
+
+        The raw ``ADU`` array is written to disk, and the ``BUNIT`` header
+        keyword is set to ``"adu"`` to indicate the physical unit.
 
         Args:
             filename: Path to the output FITS file.
@@ -61,6 +86,7 @@ class Image:
         header = self.header.copy() if update_header is not None else self.header
         if update_header is not None:
             header.update(update_header)
+        header["BUNIT"] = "adu"
         hdu = fits.PrimaryHDU(self.ADU, header=header)
         hdu.writeto(filename, overwrite=True)
 
@@ -102,6 +128,13 @@ class Image:
             return None
         return value
 
+    @property
+    def history(self) -> str | None:
+        value = self.header.get("HISTORY", default=None)
+        if value is None or not isinstance(value, str):
+            return None
+        return value
+
     #########################################################################
     # utilities
     #########################################################################
@@ -109,9 +142,10 @@ class Image:
     def copy(self) -> "Image":
         """Create a deep copy of the Image object."""
         return Image(
-            data=copy.deepcopy(self.ADU),
+            data=copy.deepcopy(self.data),
             header=copy.deepcopy(self.header),
             filename=self.filename,
+            unit="electron",
         )
 
     def cutout(self, x_start: int, x_end: int, y_start: int, y_end: int) -> np.ndarray:
