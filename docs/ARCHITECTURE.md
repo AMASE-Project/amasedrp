@@ -16,13 +16,13 @@ This mirrors the scientist's mental model: **data → step-by-step operations �
 
 The DRP is organized into three consecutive stages that follow the natural data flow from raw detector frames to science-ready spectra:
 
-- **Stage 1: Image Pre-processing** — `preprocessing/`  
+- **Stage 1: Image Pre-processing** — `preprocessing/`
   Transform raw CMOS frames into calibrated 2D images (bias/dark/flat/cosmic).
 
-- **Stage 2: Spectral Data Reduction** — `reduction/`  
+- **Stage 2: Spectral Data Reduction** — `reduction/`
   Transform calibrated 2D images into extracted 1D spectra (fiber tracing, boxcar/optimal extraction, spectro-perfectionism).
 
-- **Stage 3: Spectral Data Calibration** — `calibration/`  
+- **Stage 3: Spectral Data Calibration** — `calibration/`
   Transform extracted spectra into wavelength-calibrated, sky-subtracted, flux-calibrated products (wavelength calibration, fiber flat-fielding, LSF modeling, sky subtraction, flux calibration, coaddition).
 
 Each stage follows the same **Three-Part Module Pattern** (`core/` → `methods/` → orchestrator).
@@ -32,8 +32,8 @@ Each stage follows the same **Three-Part Module Pattern** (`core/` → `methods/
 ```
 src/amasedrp/
 │
-├── preprocessing/          # Stage 1: Image Pre-processing
-  │   ├── __init__.py           # Public API: `image_preprocessing`, `preprocessing`
+├── preprocessing/            # Stage 1: Image Pre-processing
+│   ├── __init__.py           # Public API: `image_preprocessing`, `preprocessing`
 │   ├── core/                 # Data structures
 │   │   └── image.py          # Image container: data + FITS header + I/O
 │   ├── methods/              # Atomic processing steps
@@ -41,7 +41,7 @@ src/amasedrp/
 │   │   ├── dark.py           # Dark current subtraction
 │   │   ├── flat.py           # Pixel flat-field correction
 │   │   └── cosmic.py         # Cosmic ray detection & removal
-│   └── image_preprocessing.py # Main entry: orchestrates steps from methods/
+│   └── image_preprocessing.py# Main entry: orchestrates steps from methods/
 │
 ├── reduction/                # Stage 2: Spectral Data Reduction
 │   ├── __init__.py           # Public API: `run_reduction`, `run_quick_reduction`
@@ -69,7 +69,7 @@ src/amasedrp/
 │
 └── visualization/            # [QA & PLOTTING]
     ├── plotting.py           # General plots (image, spectra, LSF)
-    └── qa_plots.py         # Diagnostic plots for pipeline verification
+    └── qa_plots.py           # Diagnostic plots for pipeline verification
 ```
 
 ## Module Anatomy
