@@ -32,44 +32,47 @@ Each stage follows the same **Three-Part Module Pattern** (`core/` → `methods/
 ```
 src/amasedrp/
 │
-├── preprocessing/            # Stage 1: Image Pre-processing
-│   ├── __init__.py           # Public API: `image_preprocessing`, `preprocessing`
-│   ├── core/                 # Data structures
-│   │   └── image.py          # Image container: data + FITS header + I/O
-│   ├── methods/              # Atomic processing steps
-│   │   ├── bias.py           # Bias subtraction
-│   │   ├── dark.py           # Dark current subtraction
-│   │   ├── flat.py           # Pixel flat-field correction
-│   │   └── cosmic.py         # Cosmic ray detection & removal
-│   └── image_preprocessing.py# Main entry: orchestrates steps from methods/
+├── preprocessing/              # Stage 1: Image Pre-processing
+│   ├── __init__.py             # Public API: `image_preprocessing`, `preprocessing`
+│   ├── core/                   # Data structures
+│   │   └── image.py            # Image container: data + FITS header + I/O
+│   ├── methods/                # Atomic processing steps
+│   │   ├── bias.py             # Bias subtraction
+│   │   ├── dark.py             # Dark current subtraction
+│   │   ├── flat.py             # Pixel flat-field correction
+│   │   └── cosmic.py           # Cosmic ray detection & removal
+│   └── image_preprocessing.py  # Main entry: orchestrates steps from methods/
 │
-├── reduction/                # Stage 2: Spectral Data Reduction
-│   ├── __init__.py           # Public API: `run_reduction`, `run_quick_reduction`
-│   ├── core/                 # Data structures
-│   │   ├── rss.py            # Row-Stacked Spectra data model
-│   │   └── fiber.py          # Fiber metadata container
-│   ├── methods/              # Atomic processing steps
-│   │   ├── fiber_tracing.py  # Fiber identification & trace modeling
-│   │   └── extraction.py     # Spectral extraction (boxcar / optimal / spectro-perfectionism)
-│   └── reduction.py          # Stage 2 main entry: orchestrates spectral extraction
+├── reduction/                  # Stage 2: Spectral Data Reduction
+│   ├── __init__.py             # Public API: `run_reduction`, `run_quick_reduction`
+│   ├── core/                   # Data structures
+│   │   ├── fibermap.py         # FiberMap: per-fiber metadata (astropy.Table)
+│   │   ├── fiberidentifier.py  # FibersIdentifier: block + fiber detection
+│   │   ├── tracemask.py        # TraceMask: polynomial fiber trace model
+│   │   ├── rss.py              # Row-Stacked Spectra data model
+│   │   └── fiber.py            # Fiber metadata container
+│   ├── methods/                # Atomic processing steps
+│   │   ├── fiber_tracing.py    # Fiber identification & trace modeling
+│   │   └── extraction.py       # Spectral extraction (boxcar / optimal / spectro-perfectionism)
+│   └── reduction.py            # Stage 2 main entry: orchestrates spectral extraction
 │
-├── calibration/              # Stage 3: Master Calibration & Data Calibration
+├── calibration/                # Stage 3: Master Calibration & Data Calibration
 │   ├── __init__.py
-│   ├── core/                 # Calibration-specific data models
-│   ├── methods/              # Calibration algorithms
-│   │   ├── fiberflat.py      # Fiber-to-fiber flat-field correction
-│   │   ├── wavelength.py     # Wavelength calibration
-│   │   ├── sky.py            # Sky background subtraction
-│   │   └── fluxcal.py        # Flux calibration
-│   └── calibration.py        # Main entry: master calibration builder
+│   ├── core/                   # Calibration-specific data models
+│   ├── methods/                # Calibration algorithms
+│   │   ├── fiberflat.py        # Fiber-to-fiber flat-field correction
+│   │   ├── wavelength.py       # Wavelength calibration
+│   │   ├── sky.py              # Sky background subtraction
+│   │   └── fluxcal.py          # Flux calibration
+│   └── calibration.py          # Main entry: master calibration builder
 │
-├── utils/                    # [UTILITIES] Shared helpers
-│   ├── fits_io.py            # FITS read/write wrappers
-│   └── logging.py            # Logging configuration
+├── utils/                      # [UTILITIES] Shared helpers
+│   ├── fits_io.py              # FITS read/write wrappers
+│   └── logging.py              # Logging configuration
 │
-└── visualization/            # [QA & PLOTTING]
-    ├── plotting.py           # General plots (image, spectra, LSF)
-    └── qa_plots.py           # Diagnostic plots for pipeline verification
+└── visualization/              # [QA & PLOTTING]
+    ├── plotting.py             # General plots (image, spectra, LSF)
+    └── qa_plots.py             # Diagnostic plots for pipeline verification
 ```
 
 ## Module Anatomy

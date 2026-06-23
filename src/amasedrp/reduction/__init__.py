@@ -1,7 +1,11 @@
-from .reduction import run_reduction
-from .reduction import run_quick_reduction
+from .core import FiberMap, FibersIdentifier, TraceMask
+from .reduction import identify_and_trace_fibers, run_reduction, run_quick_reduction
 
 __all__ = [
-    'run_reduction',
-    'run_quick_reduction',
+    "FiberMap",
+    "FibersIdentifier",
+    "TraceMask",
+    "identify_and_trace_fibers",
+    "run_reduction",
+    "run_quick_reduction",
 ]
