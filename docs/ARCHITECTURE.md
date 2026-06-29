@@ -44,17 +44,18 @@ src/amasedrp/
 │   └── image_preprocessing.py  # Main entry: orchestrates steps from methods/
 │
 ├── reduction/                  # Stage 2: Spectral Data Reduction
-│   ├── __init__.py             # Public API: `run_reduction`, `run_quick_reduction`
-│   ├── core/                   # Data structures
-│   │   ├── fibermap.py         # FiberMap: per-fiber metadata (astropy.Table)
-│   │   ├── fiberidentifier.py  # FibersIdentifier: block + fiber detection
-│   │   ├── tracemask.py        # TraceMask: polynomial fiber trace model
-│   │   ├── rss.py              # Row-Stacked Spectra data model
-│   │   └── fiber.py            # Fiber metadata container
-│   ├── methods/                # Atomic processing steps
-│   │   ├── fiber_tracing.py    # Fiber identification & trace modeling
-│   │   └── extraction.py       # Spectral extraction (boxcar / optimal / spectro-perfectionism)
-│   └── reduction.py            # Stage 2 main entry: orchestrates spectral extraction
+│   ├── __init__.py             # Public API: FiberMap, TraceMask, identify_and_trace_fibers
+│   ├── core/                   # Data structures & builders
+│   │   ├── fibermap.py         # FiberMap: per-fiber metadata table (astropy.Table)
+│   │   ├── fiberidentifier.py  # FibersIdentifier: block + fiber detection from flat
+│   │   ├── tracemask.py        # TraceMask: Legendre polynomial trace model
+│   │   ├── fiberframe.py       # FiberFrame: extracted 2D spectra container (flux, ivar, mask, wave)
+│   │   └── fiberprofile.py     # FiberProfile: normalized cross-dispersion PSF model per fiber
+│   ├── methods/                # Atomic, stateless processing steps
+│   │   ├── fiber_tracing.py    # Barycenter tracing & Legendre fitting helpers
+│   │   ├── profile_modeling.py # Build FiberProfile from master flat
+│   │   └── extraction.py       # Boxcar & optimal extraction algorithms
+│   └── reduction.py            # Stage 2 orchestrator: identify → trace → extract
 │
 ├── calibration/                # Stage 3: Master Calibration & Data Calibration
 │   ├── __init__.py
@@ -133,6 +134,151 @@ def image_calibration(input_image, master_bias, master_dark, master_pixflat, ste
         result = flat.apply_pixel_flat(result, master_pixflat, master_bias, master_dark)
     return result
 ```
+
+---
+
+## Stage 2: `reduction/` — Detailed Design
+
+This section details the internal design of the spectral data reduction stage, informed by the existing `amasedrp` implementation and architectural patterns from `MaNGA DRP`, `lvmdrp`, and `desispec`.
+
+### 2.1 Data Flow
+
+The reduction stage transforms a **2-D calibrated image** (from `preprocessing/`) into a **2-D row-stacked spectrum** (`FiberFrame`) ready for calibration. The pipeline follows a strict linear data flow:
+
+```
+Master Flat Image
+       │
+       ▼
+┌─────────────────────┐
+│ FibersIdentifier    │  ← core/fiberidentifier.py
+│  .identify()        │     Detect blocks & peaks at central row
+└──────────┬──────────┘
+           ▼
+      FiberMap          ← core/fibermap.py
+      (fiber_id, block_id, approx_x, valid)
+           │
+           ▼
+┌─────────────────────┐
+│ TraceMask           │  ← core/tracemask.py
+│ .from_fibermap()    │     Barycenter trace + Legendre fit
+└──────────┬──────────┘
+           ▼
+      TraceMask         ← core/tracemask.py
+      (coeffs, domain, eval())
+           │
+           ├──────────────────────────────────────┐
+           ▼                                      ▼
+┌─────────────────────────┐          ┌─────────────────────────┐
+│ build_fiber_profile()   │          │ Science Image           │
+│ (methods/profile_)      │          │ (from preprocessing/)   │
+│  modeling.py)           │          └──────────┬──────────────┘
+└───────────┬─────────────┘                     │
+            ▼                                   ▼
+      FiberProfile                        TraceMask.eval()
+      (profile, x_offsets)                (trace_positions)
+            │                                   │
+            └───────────────┬───────────────────┘
+                            ▼
+                   ┌─────────────────┐
+                   │ extract_spectra │  ← methods/extraction.py
+                   │ (boxcar/optimal)│
+                   └────────┬────────┘
+                            ▼
+                      FiberFrame        ← core/fiberframe.py
+                      (flux, ivar, mask, wave, fibermap)
+```
+
+**Key principle:** `core/` objects are passed between steps; `methods/` are stateless functions that operate on them. No method writes to disk.
+
+### 2.2 `core/` — Data Structures
+
+#### `FiberMap` (`core/fibermap.py`) *[IMPLEMENTED]*
+- **Base:** `astropy.table.Table`
+- **Columns:** `FIBERID`, `BLOCKID`, `BLOCK_LOCAL_ID`, `APPROX_X`, `CENTER_ROW`, `VALID`
+- **Role:** Single source of truth for "which fibers exist and where they are."
+- **QA:** `mark_invalid()`, `get_block()`, `validate()`
+
+#### `TraceMask` (`core/tracemask.py`) *[IMPLEMENTED]*
+- **Storage:** Legendre polynomial coefficients per fiber `(n_fibers, deg+1)`
+- **Role:** Compact, sub-pixel model of fiber curvature on the CCD.
+- **API:** `eval(rows)` → `(n_fibers, n_rows)` trace positions.
+- **Builder:** `TraceMask.from_fibermap(fibermap, image, poly_deg=10)` traces barycenters and fits.
+
+#### `FiberFrame` (`core/fiberframe.py`) *[RECOMMENDED — NEW]*
+Inspired by `desispec.Frame` and `lvmdrp.RSS`.
+- **Storage:** `flux`, `ivar`, `mask` as `(n_fibers, n_wave)`; `wave` as `(n_wave,)` or `(n_fibers, n_wave)`
+- **Role:** The canonical intermediate data product passed from `reduction/` → `calibration/`.
+- **Metadata:** `fibermap` (FiberMap), `meta` (FITS header dict)
+- **I/O:** `to_fits()`, `from_fits()` — critical for checkpointing pipeline steps.
+
+**Why not `lvmdrp.RSS`?** `RSS` in lvmdrp inherits from a massive `FiberRows` + `Header` hierarchy. We prefer **composition** to keep the class lightweight and explicit.
+
+#### `FiberProfile` (`core/fiberprofile.py`) *[RECOMMENDED — NEW]*
+Required for **flat-relative optimal extraction** (see MaNGA `extract_row`).
+- **Storage:** `profile[n_fibers, n_rows, n_offsets]`, `x_offsets[n_offsets]`
+- **Role:** Normalized cross-dispersion PSF measured from a master flat.
+- **Builder:** `FiberProfile.from_flat(flat_image, tracemask, fibermap, half_width=5)`
+- **Invariant:** `sum(profile, axis=-1) == 1` for every fiber/row.
+
+### 2.3 `methods/` — Algorithms
+
+#### `fiber_tracing.py` *[IMPLEMENTED — may extend]*
+- `trace_fibers_barycenter(image, approx_positions, center_row)` → dense trace array
+- `fit_traces_polynomial(traces, poly_deg)` → coefficients + domain
+- *Future:* `trace_fibers_gaussian()` for cross-correlation centroiding.
+
+#### `extraction.py` *[STUB — needs implementation]*
+- `extract_boxcar(image, trace_positions, aperture_radius)` → flux, ivar
+  - Simple aperture sum. Use for QA, quick-look, and as fallback.
+- `extract_optimal(image, trace_positions, fiber_profile)` → flux, ivar
+  - **MaNGA-style row-by-row profile fitting.** Fit Gaussian amplitudes (fixed sigma/center from flat profile) plus a low-order polynomial background per row. Iterate with sigma-clipping rejection.
+- `extract_spectra(image, tracemask, fibermap, method="boxcar", ...)` → `FiberFrame`
+  - **High-level orchestrator.** Evaluates trace positions, dispatches to boxcar or optimal, packages result into `FiberFrame`.
+
+**Design note:** The optimal extractor should follow MaNGA's iterative rejection:
+1. Fit model to row.
+2. Compute residuals.
+3. Mask the single worst pixel in each contiguous bad group.
+4. Re-fit until convergence or `maxiter`.
+
+#### `profile_modeling.py` *[RECOMMENDED — NEW]*
+- `build_fiber_profile(flat_image, tracemask, fibermap, half_width)` → `FiberProfile`
+  - For each fiber/row, cut out a cross-dispersion slice centered on the trace, normalize.
+- `normalize_profile(profile)` → ensure sum-to-one.
+
+### 2.4 Orchestrator (`reduction.py`)
+
+The public API is intentionally minimal:
+
+```python
+# Existing
+fibermap, tracemask = identify_and_trace_fibers(
+    image=flat_image,
+    n_blocks_expected=19,
+    n_fibers_per_block_expected=29,
+)
+
+# Recommended extension
+fiber_profile = build_fiber_profile(flat_image, tracemask, fibermap)
+
+fiber_frame = extract_spectra(
+    image=science_image,
+    tracemask=tracemask,
+    fibermap=fibermap,
+    method="optimal",
+    fiber_profile=fiber_profile,
+)
+```
+
+### 2.5 Design Decisions
+
+| Decision | Rationale |
+|----------|-----------|
+| **Separate `FiberProfile` from `TraceMask`** | `TraceMask` answers "where is the fiber?" (geometry). `FiberProfile` answers "what is its shape?" (PSF). Decoupling lets us update one without the other. |
+| **`FiberFrame` as 2-D array `(fiber, wave)`** | Matches `desispec.Frame` and `lvmdrp.RSS`. Each row is one fiber's 1-D spectrum. Easy to feed into `calibration/` (wavelength, sky, flux cal). |
+| **Optimal extraction uses flat-derived profile** | MaNGA and lvmdrp both do this. It avoids assuming a theoretical Gaussian and adapts to the real instrument PSF. |
+| **Boxcar as first-class citizen** | Not just a placeholder. Needed for: (1) quick-look QA, (2) identifying bright fibers before optimal extraction (MaNGA `find_whopping`), (3) fallback when optimal fails. |
+| **No `Aperture` class for boxcar** | `lvmdrp` has a complex `Aperture` class with sub-pixel integration. For a first implementation, an integer `aperture_radius` is sufficient and far simpler. Upgrade path: replace the integer with a `PixelAperture` object later. |
 
 ---
 

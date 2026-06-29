@@ -12,9 +12,10 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from amasedrp.reduction import identify_and_trace_fibers
+from amasedrp.reduction import identify_and_trace_fibers, extract_spectra, run_quick_reduction, run_reduction
 from amasedrp.reduction.core.fibermap import FiberMap
 from amasedrp.reduction.core.tracemask import TraceMask
+from amasedrp.reduction.core.fiberframe import FiberFrame
 
 
 def _synthetic_fiber_flat(
@@ -102,4 +103,137 @@ class TestIdentifyAndTraceFibers:
                 image=image,
                 n_blocks_expected=3,  # wrong — image only has 2 blocks
                 n_fibers_per_block_expected=5,
+            )
+
+
+# ---------------------------------------------------------------------------
+# extract_spectra tests
+# ---------------------------------------------------------------------------
+
+class TestExtractSpectra:
+    """Tests for the extract_spectra orchestrator."""
+
+    def _make_flat_and_science(self, n_rows=256, n_blocks=2, n_fibers_per_block=5):
+        flat = _synthetic_fiber_flat(n_rows=n_rows, n_blocks=n_blocks, n_fibers_per_block=n_fibers_per_block)
+        # Science = flat + small noise
+        science = flat + np.random.default_rng(123).normal(0, 0.01, flat.shape)
+        return flat, science
+
+    def test_boxcar_returns_fiberframe(self):
+        """S1: extract_spectra with boxcar returns a FiberFrame."""
+        flat, science = self._make_flat_and_science()
+        fibermap, tracemask = identify_and_trace_fibers(
+            image=flat, n_blocks_expected=2, n_fibers_per_block_expected=5,
+        )
+        frame = extract_spectra(
+            image=science, tracemask=tracemask, fibermap=fibermap, method="boxcar",
+        )
+        assert isinstance(frame, FiberFrame)
+        assert frame.n_fibers == 10
+        assert frame.flux.ndim == 2
+
+    def test_optimal_stub_raises(self):
+        """S2: extract_spectra with optimal raises NotImplementedError."""
+        flat, science = self._make_flat_and_science()
+        fibermap, tracemask = identify_and_trace_fibers(
+            image=flat, n_blocks_expected=2, n_fibers_per_block_expected=5,
+        )
+        from amasedrp.reduction.methods.profile_modeling import build_fiber_profile
+        fiber_profile = build_fiber_profile(flat, tracemask, fibermap, half_width=3)
+        with pytest.raises(NotImplementedError):
+            extract_spectra(
+                image=science, tracemask=tracemask, fibermap=fibermap,
+                method="optimal", fiber_profile=fiber_profile,
+            )
+
+    def test_optimal_requires_profile(self):
+        """S2: Calling optimal without fiber_profile raises ValueError."""
+        flat, science = self._make_flat_and_science()
+        fibermap, tracemask = identify_and_trace_fibers(
+            image=flat, n_blocks_expected=2, n_fibers_per_block_expected=5,
+        )
+        with pytest.raises(ValueError):
+            extract_spectra(
+                image=science, tracemask=tracemask, fibermap=fibermap, method="optimal",
+            )
+
+    def test_rejects_unknown_method(self):
+        """S2: Unknown method raises ValueError."""
+        flat, science = self._make_flat_and_science()
+        fibermap, tracemask = identify_and_trace_fibers(
+            image=flat, n_blocks_expected=2, n_fibers_per_block_expected=5,
+        )
+        with pytest.raises(ValueError):
+            extract_spectra(
+                image=science, tracemask=tracemask, fibermap=fibermap, method="magic",
+            )
+
+
+# ---------------------------------------------------------------------------
+# run_quick_reduction tests
+# ---------------------------------------------------------------------------
+
+class TestRunQuickReduction:
+    """Tests for the quick-look reduction pipeline."""
+
+    def test_returns_fiberframe(self):
+        """S1: run_quick_reduction returns a FiberFrame."""
+        flat = _synthetic_fiber_flat(n_rows=256, n_blocks=2, n_fibers_per_block=5)
+        science = flat + np.random.default_rng(123).normal(0, 0.01, flat.shape)
+        frame = run_quick_reduction(
+            image=science,
+            flat_image=flat,
+            n_blocks_expected=2,
+            n_fibers_per_block_expected=5,
+        )
+        assert isinstance(frame, FiberFrame)
+        assert frame.n_fibers == 10
+        assert frame.flux.ndim == 2
+
+
+# ---------------------------------------------------------------------------
+# run_reduction tests
+# ---------------------------------------------------------------------------
+
+class TestRunReduction:
+    """Tests for the full reduction pipeline."""
+
+    def test_boxcar_method_returns_fiberframe(self):
+        """S1: run_reduction with boxcar returns a FiberFrame."""
+        flat = _synthetic_fiber_flat(n_rows=256, n_blocks=2, n_fibers_per_block=5)
+        science = flat + np.random.default_rng(123).normal(0, 0.01, flat.shape)
+        frame = run_reduction(
+            image=science,
+            flat_image=flat,
+            n_blocks_expected=2,
+            n_fibers_per_block_expected=5,
+            method="boxcar",
+        )
+        assert isinstance(frame, FiberFrame)
+        assert frame.n_fibers == 10
+
+    def test_optimal_stub_raises(self):
+        """S2: run_reduction with optimal raises NotImplementedError."""
+        flat = _synthetic_fiber_flat(n_rows=256, n_blocks=2, n_fibers_per_block=5)
+        science = flat + np.random.default_rng(123).normal(0, 0.01, flat.shape)
+        with pytest.raises(NotImplementedError):
+            run_reduction(
+                image=science,
+                flat_image=flat,
+                n_blocks_expected=2,
+                n_fibers_per_block_expected=5,
+                method="optimal",
+            )
+
+    def test_rejects_unknown_method(self):
+        """S2: Unknown method raises ValueError."""
+        flat = _synthetic_fiber_flat(n_rows=256, n_blocks=2, n_fibers_per_block=5)
+        science = flat + np.random.default_rng(123).normal(0, 0.01, flat.shape)
+        with pytest.raises(ValueError):
+            run_reduction(
+                image=science,
+                flat_image=flat,
+                n_blocks_expected=2,
+                n_fibers_per_block_expected=5,
+                method="magic",
             )

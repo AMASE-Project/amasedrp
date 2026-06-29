@@ -16,7 +16,12 @@ from numpy.typing import NDArray
 
 from .core.fiberidentifier import FibersIdentifier
 from .core.fibermap import FiberMap
+from .core.fiberframe import FiberFrame
+from .core.fiberprofile import FiberProfile
 from .core.tracemask import TraceMask
+from .methods.boxcar import extract_boxcar
+from .methods.optimal import extract_optimal
+from .methods.profile_modeling import build_fiber_profile
 
 
 def identify_and_trace_fibers(
@@ -112,17 +117,250 @@ def identify_and_trace_fibers(
     return fibermap, tracemask
 
 
-def run_reduction():
-    """Main function to run the full data reduction pipeline.
+def extract_spectra(
+    image: NDArray[np.floating],
+    tracemask: TraceMask,
+    fibermap: FiberMap,
+    method: str = "boxcar",
+    fiber_profile: FiberProfile | None = None,
+    wave: NDArray[np.floating] | None = None,
+    variance: NDArray[np.floating] | None = None,
+    mask: NDArray[np.bool_] | None = None,
+    aperture_radius: int = 3,
+    sigma_clip: float = 5.0,
+    maxiter: int = 5,
+    meta: dict[str, Any] | None = None,
+) -> FiberFrame:
+    """Extract 1-D spectra from a 2-D image using traced fiber positions.
 
-    TODO: Implement the full reduction pipeline.
+    Parameters
+    ----------
+    image
+        2-D calibrated science image.
+    tracemask
+        Polynomial trace model.
+    fibermap
+        Per-fiber metadata table.
+    method
+        Extraction method: ``"boxcar"`` or ``"optimal"``.
+    fiber_profile
+        Required when *method* is ``"optimal"``.
+    wave
+        Optional wavelength array.  Defaults to pixel indices ``[0, n_rows)``.
+    variance
+        Optional variance image.
+    mask
+        Optional boolean bad-pixel mask.
+    aperture_radius
+        Aperture half-width for boxcar extraction.
+    sigma_clip
+        Sigma-clipping threshold for optimal extraction.
+    maxiter
+        Maximum rejection iterations for optimal extraction.
+    meta
+        Optional metadata dictionary.
+
+    Returns
+    -------
+    FiberFrame
+        Extracted row-stacked spectra.
+
+    Raises
+    ------
+    ValueError
+        If *method* is unknown or ``"optimal"`` is requested without
+        *fiber_profile*.
     """
-    raise NotImplementedError("Full reduction pipeline is not yet implemented.")
+    if method not in ("boxcar", "optimal"):
+        raise ValueError(f"Unknown extraction method: {method!r}")
+
+    if method == "optimal" and fiber_profile is None:
+        raise ValueError('method="optimal" requires fiber_profile.')
+
+    rows = np.arange(image.shape[0], dtype=int)
+    trace_positions = tracemask.eval(rows)
+
+    if method == "boxcar":
+        flux, ivar, out_mask = extract_boxcar(
+            image=image,
+            trace_positions=trace_positions,
+            aperture_radius=aperture_radius,
+            variance=variance,
+            mask=mask,
+        )
+    else:  # optimal
+        flux, ivar, out_mask = extract_optimal(
+            image=image,
+            trace_positions=trace_positions,
+            fiber_profile=fiber_profile,
+            variance=variance,
+            mask=mask,
+            sigma_clip=sigma_clip,
+            maxiter=maxiter,
+        )
+
+    if wave is None:
+        wave = np.arange(image.shape[0], dtype=float)
+
+    extraction_meta = {
+        "METHOD": method,
+        "APERTURE": aperture_radius,
+        **(meta or {}),
+    }
+    if method == "optimal":
+        extraction_meta["SIGMA_CLIP"] = sigma_clip
+        extraction_meta["MAXITER"] = maxiter
+
+    return FiberFrame(
+        wave=wave,
+        flux=flux,
+        ivar=ivar,
+        mask=out_mask,
+        fibermap=fibermap,
+        meta=extraction_meta,
+    )
 
 
-def run_quick_reduction():
-    """Quick reduction pipeline for rapid data inspection.
+def run_quick_reduction(
+    image: NDArray[np.floating],
+    flat_image: NDArray[np.floating],
+    *,
+    n_blocks_expected: int = 19,
+    n_fibers_per_block_expected: int = 29,
+    aperture_radius: int = 3,
+    poly_deg: int = 10,
+    meta: dict[str, Any] | None = None,
+    **identify_kwargs: Any,
+) -> FiberFrame:
+    """Quick-look reduction: identify fibers and extract with boxcar.
 
-    TODO: Implement the quick reduction pipeline.
+    Parameters
+    ----------
+    image
+        2-D science image.
+    flat_image
+        2-D fiber-flat image used for identification and tracing.
+    n_blocks_expected
+        Expected number of fiber blocks.
+    n_fibers_per_block_expected
+        Expected number of fibers per block.
+    aperture_radius
+        Boxcar aperture half-width.
+    poly_deg
+        Trace polynomial degree.
+    meta
+        Optional metadata.
+    **identify_kwargs
+        Additional arguments forwarded to :func:`identify_and_trace_fibers`.
+
+    Returns
+    -------
+    FiberFrame
+        Boxcar-extracted spectra.
     """
-    raise NotImplementedError("Quick reduction pipeline is not yet implemented.")
+    fibermap, tracemask = identify_and_trace_fibers(
+        image=flat_image,
+        n_blocks_expected=n_blocks_expected,
+        n_fibers_per_block_expected=n_fibers_per_block_expected,
+        poly_deg=poly_deg,
+        **identify_kwargs,
+    )
+
+    return extract_spectra(
+        image=image,
+        tracemask=tracemask,
+        fibermap=fibermap,
+        method="boxcar",
+        aperture_radius=aperture_radius,
+        meta=meta,
+    )
+
+
+def run_reduction(
+    image: NDArray[np.floating],
+    flat_image: NDArray[np.floating],
+    *,
+    n_blocks_expected: int = 19,
+    n_fibers_per_block_expected: int = 29,
+    method: str = "optimal",
+    aperture_radius: int = 3,
+    profile_half_width: int = 5,
+    poly_deg: int = 10,
+    variance: NDArray[np.floating] | None = None,
+    mask: NDArray[np.bool_] | None = None,
+    meta: dict[str, Any] | None = None,
+    **identify_kwargs: Any,
+) -> FiberFrame:
+    """Full reduction: identify fibers, build profile, and extract spectra.
+
+    Parameters
+    ----------
+    image
+        2-D science image.
+    flat_image
+        2-D fiber-flat image.
+    n_blocks_expected
+        Expected number of fiber blocks.
+    n_fibers_per_block_expected
+        Expected number of fibers per block.
+    method
+        ``"optimal"`` (default) or ``"boxcar"``.
+    aperture_radius
+        Boxcar aperture half-width (used for boxcar or fallback).
+    profile_half_width
+        Half-width for fiber profile extraction from flat.
+    poly_deg
+        Trace polynomial degree.
+    variance
+        Optional variance image.
+    mask
+        Optional bad-pixel mask.
+    meta
+        Optional metadata.
+    **identify_kwargs
+        Additional arguments forwarded to :func:`identify_and_trace_fibers`.
+
+    Returns
+    -------
+    FiberFrame
+        Extracted spectra.
+    """
+    fibermap, tracemask = identify_and_trace_fibers(
+        image=flat_image,
+        n_blocks_expected=n_blocks_expected,
+        n_fibers_per_block_expected=n_fibers_per_block_expected,
+        poly_deg=poly_deg,
+        **identify_kwargs,
+    )
+
+    if method == "optimal":
+        fiber_profile = build_fiber_profile(
+            flat_image=flat_image,
+            tracemask=tracemask,
+            fibermap=fibermap,
+            half_width=profile_half_width,
+        )
+        return extract_spectra(
+            image=image,
+            tracemask=tracemask,
+            fibermap=fibermap,
+            method="optimal",
+            fiber_profile=fiber_profile,
+            variance=variance,
+            mask=mask,
+            meta=meta,
+        )
+
+    if method == "boxcar":
+        return extract_spectra(
+            image=image,
+            tracemask=tracemask,
+            fibermap=fibermap,
+            method="boxcar",
+            aperture_radius=aperture_radius,
+            variance=variance,
+            mask=mask,
+            meta=meta,
+        )
+
+    raise ValueError(f"Unknown reduction method: {method!r}")

@@ -9,7 +9,7 @@
 
 import numpy as np
 from scipy.optimize import curve_fit
-from .wavelength_calibration import detect_lines
+from amasedrp.calibration.methods.wavelength_calibration import detect_lines
 
 
 def adjust_target_wavelength(spectrum, spectrum_wls, target_wl):

@@ -18,6 +18,8 @@ from numpy.polynomial.legendre import Legendre
 from amasedrp.reduction.core.fibermap import FiberMap
 from amasedrp.reduction.core.fiberidentifier import FibersIdentifier
 from amasedrp.reduction.core.tracemask import TraceMask
+from amasedrp.reduction.core.fiberframe import FiberFrame
+from amasedrp.reduction.core.fiberprofile import FiberProfile
 
 
 # ---------------------------------------------------------------------------
@@ -329,3 +331,175 @@ class TestEndToEnd:
         np.testing.assert_allclose(
             center_positions, fibermap["APPROX_X"], atol=2.0,
         )
+
+
+# ---------------------------------------------------------------------------
+# FiberFrame tests
+# ---------------------------------------------------------------------------
+
+class TestFiberFrame:
+    """Tests for the FiberFrame extracted-spectra container."""
+
+    def test_create_with_1d_wave(self):
+        """S1: FiberFrame accepts 1-D shared wave grid."""
+        wave = np.arange(1000, dtype=float)
+        flux = np.ones((15, 1000), dtype=float)
+        frame = FiberFrame(wave=wave, flux=flux)
+        assert frame.n_fibers == 15
+        assert frame.n_wave == 1000
+        assert frame.shape == (15, 1000)
+
+    def test_create_with_2d_wave(self):
+        """S1: FiberFrame accepts 2-D per-fiber wave grid."""
+        wave = np.tile(np.arange(1000, dtype=float), (15, 1))
+        flux = np.ones((15, 1000), dtype=float)
+        frame = FiberFrame(wave=wave, flux=flux)
+        assert frame.n_fibers == 15
+        assert frame.n_wave == 1000
+
+    def test_defaults_ivar_and_mask(self):
+        """S1: Default ivar is ones, default mask is zeros."""
+        wave = np.arange(100, dtype=float)
+        flux = np.ones((5, 100), dtype=float)
+        frame = FiberFrame(wave=wave, flux=flux)
+        np.testing.assert_array_equal(frame.ivar, np.ones_like(flux))
+        np.testing.assert_array_equal(frame.mask, np.zeros_like(flux, dtype=np.uint32))
+
+    def test_rejects_mismatched_flux_wave(self):
+        """S2: Mismatched flux/wave shapes raise ValueError."""
+        wave = np.arange(50, dtype=float)
+        flux = np.ones((5, 100), dtype=float)
+        with pytest.raises(ValueError):
+            FiberFrame(wave=wave, flux=flux)
+
+    def test_rejects_mismatched_ivar(self):
+        """S2: Mismatched ivar shape raises ValueError."""
+        wave = np.arange(100, dtype=float)
+        flux = np.ones((5, 100), dtype=float)
+        ivar = np.ones((5, 50), dtype=float)
+        with pytest.raises(ValueError):
+            FiberFrame(wave=wave, flux=flux, ivar=ivar)
+
+    def test_rejects_mismatched_fibermap(self):
+        """S2: fibermap row count must match n_fibers."""
+        wave = np.arange(100, dtype=float)
+        flux = np.ones((5, 100), dtype=float)
+        fm = FiberMap.from_arrays(
+            fiber_ids=np.arange(3),
+            block_ids=np.zeros(3, dtype=int),
+            approx_x=np.arange(3),
+            center_row=512,
+        )
+        with pytest.raises(ValueError):
+            FiberFrame(wave=wave, flux=flux, fibermap=fm)
+
+    def test_fits_roundtrip(self, tmp_path):
+        """S1: FITS write + read preserves data."""
+        wave = np.linspace(4000, 7000, 500, dtype=float)
+        flux = np.random.default_rng(42).random((10, 500))
+        ivar = np.ones_like(flux)
+        mask = np.zeros(flux.shape, dtype=np.uint32)
+        fm = FiberMap.from_arrays(
+            fiber_ids=np.arange(10),
+            block_ids=np.repeat([0, 1], 5),
+            approx_x=np.arange(10),
+            center_row=512,
+        )
+        frame = FiberFrame(
+            wave=wave,
+            flux=flux,
+            ivar=ivar,
+            mask=mask,
+            fibermap=fm,
+            meta={"PIPELINE": "amasedrp"},
+        )
+        path = tmp_path / "frame.fits"
+        frame.to_fits(path)
+        restored = FiberFrame.from_fits(path)
+
+        np.testing.assert_array_equal(restored.wave, wave)
+        np.testing.assert_array_equal(restored.flux, flux)
+        np.testing.assert_array_equal(restored.ivar, ivar)
+        np.testing.assert_array_equal(restored.mask, mask)
+        assert restored.fibermap is not None
+        assert restored.fibermap.n_fibers == 10
+        assert restored.meta.get("PIPELINE") == "amasedrp"
+
+
+# ---------------------------------------------------------------------------
+# FiberProfile tests
+# ---------------------------------------------------------------------------
+
+class TestFiberProfile:
+    """Tests for the FiberProfile PSF model container."""
+
+    def test_create_and_normalize(self):
+        """S1: Profile rows with positive sums are normalized to 1."""
+        profile = np.ones((5, 10, 7), dtype=float)
+        offsets = np.arange(-3, 4, dtype=float)
+        fp = FiberProfile(profile, offsets)
+        np.testing.assert_allclose(
+            fp.profile.sum(axis=-1), 1.0, atol=1e-12,
+        )
+
+    def test_zero_sum_fallback_to_delta(self):
+        """S2: Zero-sum rows fall back to centered delta profile."""
+        profile = np.zeros((2, 3, 5), dtype=float)
+        offsets = np.arange(-2, 3, dtype=float)
+        fp = FiberProfile(profile, offsets)
+        # Center offset index is 2
+        assert fp.profile[0, 0, 2] == 1.0
+        assert fp.profile[0, 0, :2].sum() == 0.0
+        assert fp.profile[0, 0, 3:].sum() == 0.0
+
+    def test_rejects_bad_shapes(self):
+        """S2: Bad profile/x_offsets shapes raise ValueError."""
+        with pytest.raises(ValueError):
+            FiberProfile(np.ones((5, 10)), np.arange(7))  # profile 2-D
+        with pytest.raises(ValueError):
+            FiberProfile(np.ones((5, 10, 7)), np.arange(7).reshape(7, 1))  # offsets 2-D
+        with pytest.raises(ValueError):
+            FiberProfile(np.ones((5, 10, 7)), np.arange(5))  # mismatch
+
+    def test_rejects_mismatched_fibermap(self):
+        """S2: fibermap row count must match n_fibers."""
+        profile = np.ones((5, 10, 7), dtype=float)
+        offsets = np.arange(-3, 4, dtype=float)
+        fm = FiberMap.from_arrays(
+            fiber_ids=np.arange(3),
+            block_ids=np.zeros(3, dtype=int),
+            approx_x=np.arange(3),
+            center_row=512,
+        )
+        with pytest.raises(ValueError):
+            FiberProfile(profile, offsets, fibermap=fm)
+
+    def test_at_returns_slice(self):
+        """S1: at() returns the correct 1-D slice."""
+        profile = np.ones((5, 10, 7), dtype=float)
+        offsets = np.arange(-3, 4, dtype=float)
+        fp = FiberProfile(profile, offsets)
+        sl = fp.at(2, 3)
+        assert sl.shape == (7,)
+        np.testing.assert_allclose(sl, fp.profile[2, 3, :])
+
+    def test_fits_roundtrip(self, tmp_path):
+        """S1: FITS write + read preserves data."""
+        profile = np.random.default_rng(42).random((4, 20, 7))
+        offsets = np.arange(-3, 4, dtype=float)
+        fm = FiberMap.from_arrays(
+            fiber_ids=np.arange(4),
+            block_ids=np.zeros(4, dtype=int),
+            approx_x=np.arange(4),
+            center_row=512,
+        )
+        fp = FiberProfile(profile, offsets, fibermap=fm, meta={"ORIGIN": "test"})
+        path = tmp_path / "profile.fits"
+        fp.to_fits(path)
+        restored = FiberProfile.from_fits(path)
+
+        np.testing.assert_array_almost_equal(restored.profile, fp.profile)
+        np.testing.assert_array_equal(restored.x_offsets, offsets)
+        assert restored.fibermap is not None
+        assert restored.fibermap.n_fibers == 4
+        assert restored.meta.get("ORIGIN") == "test"
