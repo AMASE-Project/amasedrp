@@ -8,8 +8,10 @@ dependencies:
   - numpy
   - scipy
   - matplotlib
-  - pandas
-  - jupyter
+  - astroscrappy
+  - joblib
+  - numba
+  - pytest
   - pip
   - pip:
     - -e .

@@ -6,15 +6,20 @@ Thank you for your interest in contributing!
 
 ```bash
 # Clone the repository
-git clone https://github.com/amase/amasedrp.git
+git clone https://github.com/AMASE-Project/amasedrp.git
 cd amasedrp
 
-# Create conda environment
-conda env create -f environment.yml
-conda activate amasedrp
-
-# Install in editable mode
+# Install in editable mode into the Python environment you use
 pip install -e .
+```
+
+If you prefer a separate conda environment, create one from
+`environment.yml` and activate the environment name given by its `name:`
+field:
+
+```bash
+conda env create -f environment.yml
+conda activate <env-name>
 ```
 
 ## Workflow
@@ -31,7 +36,7 @@ pip install -e .
 - Use **4 spaces** for indentation
 - Follow **PEP 8** style guide
 - Add type annotations where applicable
-- Write docstrings (Google or NumPy style)
+- Write docstrings in NumPy style
 
 ## Commit Message Format
 
@@ -72,7 +77,7 @@ Please include the following information:
 
 ## Reference
 
-- Project architecture: `architecture.md`
+- Project architecture: `docs/ARCHITECTURE.md`
 - User guide: `README.md`
 - Tutorials: `docs/tutorials/`
 

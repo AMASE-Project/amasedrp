@@ -58,6 +58,16 @@ class Image:
 
         The ``BUNIT`` header keyword is used to determine the physical unit of
         the data array.  If absent, the data is assumed to be in ADU.
+
+        Parameters
+        ----------
+        filename
+            Path to the input FITS file.
+
+        Returns
+        -------
+        Image
+            The image read from ``filename``.
         """
         abs_filename = os.path.abspath(os.path.expanduser(filename))
         with fits.open(abs_filename) as hdul:
@@ -77,11 +87,14 @@ class Image:
         The raw ``ADU`` array is written to disk, and the ``BUNIT`` header
         keyword is set to ``"adu"`` to indicate the physical unit.
 
-        Args:
-            filename: Path to the output FITS file.
-            update_header: Optional dictionary of header keywords to update
-                before writing. A copy of the current header is modified so
-                the original ``self.header`` is not mutated.
+        Parameters
+        ----------
+        filename
+            Path to the output FITS file.
+        update_header
+            Optional dictionary of header keywords to update before writing.
+            A copy of the current header is modified, so the original
+            ``self.header`` is not mutated.
         """
         header = self.header.copy() if update_header is not None else self.header
         if update_header is not None:
@@ -140,7 +153,13 @@ class Image:
     #########################################################################
 
     def copy(self) -> "Image":
-        """Create a deep copy of the Image object."""
+        """Create a deep copy of the Image object.
+
+        Returns
+        -------
+        Image
+            A copy with deep-copied data and header.
+        """
         return Image(
             data=copy.deepcopy(self.data),
             header=copy.deepcopy(self.header),
@@ -149,7 +168,27 @@ class Image:
         )
 
     def cutout(self, x_start: int, x_end: int, y_start: int, y_end: int) -> np.ndarray:
-        """Extract a cutout from the image data."""
+        """Extract a cutout from the image data.
+
+        Parameters
+        ----------
+        x_start, x_end
+            Column range of the cutout, ``x_start`` inclusive and ``x_end``
+            exclusive.
+        y_start, y_end
+            Row range of the cutout, ``y_start`` inclusive and ``y_end``
+            exclusive.
+
+        Returns
+        -------
+        numpy.ndarray
+            The cutout, with shape ``(y_end - y_start, x_end - x_start)``.
+
+        Raises
+        ------
+        ValueError
+            If the image has no data, or the cutout is out of bounds.
+        """
         if self.data is None:
             raise ValueError("Image data is not available.")
         if (

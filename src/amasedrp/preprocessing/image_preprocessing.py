@@ -78,7 +78,7 @@ def _image_calibration(
     master_pixflat_image: Image,
     steps: tuple[str, ...] = ("bias", "dark", "pixflat"),
 ) -> Image:
-    """Calibrate the inout (science) image with bias, dark, and pixel flat-field corrections.
+    """Calibrate the input (science) image with bias, dark, and pixel flat-field corrections.
 
     The calibration follows standard detector physics:
 
@@ -97,25 +97,35 @@ def _image_calibration(
         S2 = S1 - dark_curr * science_exptime
         S3 = S2 / pix_resp
 
-    Args:
-        input_image: The science ``Image`` to calibrate.
-        master_bias_image: Master bias frame.
-        master_dark_image: Master dark frame.
-        master_pixflat_image: Master pixel flat field.
-        steps: Calibration steps to apply.  Valid values are ``"bias"``,
-            ``"dark"``, ``"pixflat"``.  Steps are applied in the fixed logical
-            order regardless of the tuple order.
+    Parameters
+    ----------
+    input_image
+        The science ``Image`` to calibrate.
+    master_bias_image
+        Master bias frame.
+    master_dark_image
+        Master dark frame.
+    master_pixflat_image
+        Master pixel flat field.
+    steps
+        Calibration steps to apply.  Valid values are ``"bias"``, ``"dark"``,
+        ``"pixflat"``.  Steps are applied in the fixed logical order
+        regardless of the tuple order.
 
-    Returns:
+    Returns
+    -------
+    Image
         A new calibrated ``Image`` whose header carries provenance keywords
         (``CALIBRAT``, ``MBIAS``, ``MDARK``, ``MPIXFLT``, and ``HISTORY``
         entries for each applied step).
 
-    Raises:
-        ValueError: If any input is not an ``Image``, data is missing,
-            shapes do not match, required EXPTIME values are absent or
-            non-positive, a requested *step* is invalid, or the median of
-            the pixel flat field is zero/NaN.
+    Raises
+    ------
+    ValueError
+        If any input is not an ``Image``, data is missing, shapes do not
+        match, required EXPTIME values are absent or non-positive, a
+        requested *step* is invalid, or the median of the pixel flat field is
+        zero/NaN.
     """
     if not steps:
         logger.warning(
@@ -229,21 +239,36 @@ def image_preprocessing(
     science frame from disk, runs ``_image_calibration``, writes the
     result to a FITS file, and returns the calibrated ``Image`` object.
 
-    Args:
-        input_path: Path to the science FITS file.
-        bias_path: Path to the master bias FITS file.
-        dark_path: Path to the master dark FITS file.
-        pixflat_path: Path to the master pixel flat field FITS file.
-        output_path: Destination path for the calibrated FITS file.
-        steps: Calibration steps to apply.
-        update_header: Optional dictionary of FITS header keywords to
-            write into the output file (in addition to the provenance
-            keywords set by ``_image_calibration``).
-        log_file: Optional path to a log file. If provided, the
-            preprocessing module logger is configured to write *INFO*
-            and *WARNING* messages to this file.
+    Parameters
+    ----------
+    input_path
+        Path to the science FITS file.
+    bias_path
+        Path to the master bias FITS file.
+    dark_path
+        Path to the master dark FITS file.
+    pixflat_path
+        Path to the master pixel flat field FITS file.
+    output_path
+        Destination path for the calibrated FITS file.
+    steps
+        Calibration steps to apply.
+    update_header
+        Optional dictionary of FITS header keywords to write into the output
+        file (in addition to the provenance keywords set by
+        ``_image_calibration``).
+    log_file
+        Optional path to a log file. If provided, the preprocessing module
+        logger is configured to write *INFO* and *WARNING* messages to this
+        file.
+    cosmic_removal
+        If ``True``, run cosmic-ray removal after calibration.
+    **cr_kwargs
+        Keyword arguments forwarded to cosmic-ray removal.
 
-    Returns:
+    Returns
+    -------
+    Image
         The calibrated ``Image`` object.
     """
     # -- configure logging ------------------------------------------------------

@@ -6,13 +6,23 @@ build-backend = "setuptools.build_meta"
 name = "amasedrp"
 version = "0.1.0"
 description = "Data reduction pipeline for the AMASE project."
+readme = "README.md"
+requires-python = ">=3.10"
 authors = [
     {name = "Zeng Guangquan",email = "guangquan.zeng@outlook.com"}
 ]
 dependencies = [
     "astropy",
     "numpy",
+    "scipy",
+    "matplotlib",
+    "astroscrappy",
+    "joblib",
+    "numba",
 ]
+
+[project.optional-dependencies]
+test = ["pytest"]
 
 [tool.setuptools]
 package-dir = {"" = "src"}

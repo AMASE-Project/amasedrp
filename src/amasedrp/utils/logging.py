@@ -23,11 +23,14 @@ def configure_logging(
     from any ``amasedrp`` submodule are persisted to disk. Calling the
     function multiple times with the same *log_file* is a no-op.
 
-    Args:
-        log_file: Path to the log file. The directory is created if it
-            does not exist.
-        level: Minimum logging level to emit (default ``logging.INFO``).
-        fmt: Log record format string.
+    Parameters
+    ----------
+    log_file
+        Path to the log file. The directory is created if it does not exist.
+    level
+        Minimum logging level to emit (default ``logging.INFO``).
+    fmt
+        Log record format string.
     """
     # Configure the root logger for the data reduction pipeline
     root_logger: logging.Logger = logging.getLogger("amasedrp")

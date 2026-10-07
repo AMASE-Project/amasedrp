@@ -157,7 +157,7 @@ class FiberProfile:
                 header[key] = value
         header["N_FIBERS"] = self.n_fibers
         header["N_ROWS"] = self.n_rows
-        header["N_OFFSETS"] = self.n_offsets
+        header["N_OFFSET"] = self.n_offsets
         hdul.append(fits.PrimaryHDU(header=header))
 
         hdul.append(fits.ImageHDU(data=self.profile, name="PROFILE"))
