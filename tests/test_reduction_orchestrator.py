@@ -17,8 +17,8 @@ from amasedrp.reduction.core.fibermap import FiberMap
 from amasedrp.reduction.core.tracemask import TraceMask
 from amasedrp.reduction.core.fiberframe import FiberFrame
 
-# Shared synthetic fiber flat; see tests/synthetic.py for the geometry.
-from synthetic import synthetic_fiber_flat as _synthetic_fiber_flat
+# Shared synthetic fiber flat; see amasedrp/simulate.py for the geometry.
+from amasedrp.simulate import synthetic_fiber_flat as _synthetic_fiber_flat
 
 
 class TestIdentifyAndTraceFibers:

@@ -28,6 +28,7 @@ repository ships no raw data.
 ## Learn more
 
 - `docs/ARCHITECTURE.md` — module layout and design decisions.
-- `docs/tutorials/` — Jupyter walkthroughs. Install Jupyter yourself; it is not
-  a pipeline dependency.
+- `docs/tutorials/` — Jupyter walkthroughs, numbered in pipeline order. Start
+  at the [index](docs/tutorials/README.md) or at `01_quickstart.ipynb`. Install
+  Jupyter yourself; it is not a pipeline dependency.
 - `docs/CONTRIBUTING.md` — development setup, style and test commands.

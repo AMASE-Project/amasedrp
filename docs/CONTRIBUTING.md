@@ -79,7 +79,8 @@ Please include the following information:
 
 - Project architecture: `docs/ARCHITECTURE.md`
 - User guide: `README.md`
-- Tutorials: `docs/tutorials/`
+- Tutorials: `docs/tutorials/`, index at `docs/tutorials/README.md`. They are
+  stored with cleared outputs; run one to see its figures.
 
 ## Code of Conduct
 

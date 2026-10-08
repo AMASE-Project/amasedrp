@@ -63,6 +63,7 @@ src/amasedrp/
 │   │   ├── bias.py             # Bias subtraction
 │   │   ├── dark.py             # Dark current subtraction
 │   │   ├── flat.py             # Pixel flat-field correction
+│   │   ├── master.py           # Master frame stacking (median combine)
 │   │   └── cosmic.py           # Cosmic ray detection & removal
 │   └── image_preprocessing.py  # Main entry: orchestrates steps from methods/
 │
@@ -84,13 +85,17 @@ src/amasedrp/
 │   ├── calibration.py          # Wavelength solution: solve and apply
 │   ├── lines.py                # ThAr line selections, per channel
 │   ├── core/                   # Calibration-specific data models
-│   │   └── wavelengthsolution.py  # WavelengthSolution: per-fiber polynomial
+│   │   ├── wavelengthsolution.py  # WavelengthSolution: per-fiber polynomial
+│   │   └── linespreadfunction.py  # LineSpreadFunction: per-fiber line width
 │   ├── methods/                # Calibration algorithms
 │   │   ├── fiberflat.py        # Fiber-to-fiber flat-field correction
 │   │   ├── wavelength_calibration.py # Wavelength calibration
 │   │   ├── lsf_fitting.py      # Line-spread function fitting
 │   │   ├── sky.py              # Sky background subtraction
 │   │   └── fluxcal.py          # Flux calibration
+│
+├── observation.py              # Frame selection and loading for an observation
+├── simulate.py                 # Synthetic frames, for verification and tutorials
 │
 ├── utils/                      # Shared helpers
 │   ├── logging.py              # Logging configuration
@@ -511,4 +516,6 @@ is written yet.  These are next work, not a design to follow.
 
 ---
 
-*See `docs/tutorials/` for Jupyter Notebook guides on using the pipeline.*
+*See [`docs/tutorials/`](tutorials/README.md) for Jupyter Notebook guides on
+using the pipeline. They run on the synthetic frames from `simulate.py`, so no
+observation data is needed.*
