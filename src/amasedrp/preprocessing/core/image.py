@@ -35,13 +35,12 @@ class Image:
         self.filename: str | None = filename
         self.header: fits.Header = header
         gain: float = self.gain if self.gain is not None else DEFAULT_GAIN
+        # The electron array is the single stored array.  ``ADU`` is derived
+        # from it, so a calibration step cannot leave the two out of step.
         if unit == "adu":
-            self.ADU: np.ndarray = data.astype(np.float32)
-            self.electrons: np.ndarray = self.ADU * gain
+            self.data: np.ndarray = data.astype(np.float32) * gain
         else:  # unit == "electron"
-            self.electrons: np.ndarray = data.astype(np.float32)
-            self.ADU: np.ndarray = self.electrons / gain
-        self.data: np.ndarray = self.electrons
+            self.data: np.ndarray = data.astype(np.float32)
         self.header["BUNIT"] = unit
         if np.any(self.data < 0.0):
             warnings.warn(
@@ -72,8 +71,15 @@ class Image:
         abs_filename = os.path.abspath(os.path.expanduser(filename))
         with fits.open(abs_filename) as hdul:
             hdu: fits.PrimaryHDU | Any = hdul[0]
-            data: np.ndarray = hdu.data
+            data: np.ndarray | None = hdu.data
             header: fits.Header = hdu.header
+        if data is None:
+            # Reading the first HDU that holds data would turn a multi-extension
+            # product, such as a FiberFrame, into a wrong single array.
+            raise ValueError(
+                f"{abs_filename} holds no data in its primary HDU; this is not "
+                f"an image file."
+            )
         unit = header.get("BUNIT", "adu").lower()  # type: ignore[assignment]
         if unit not in ("adu", "electron"):
             unit = "adu"
@@ -85,7 +91,8 @@ class Image:
         """Write the image to a FITS file.
 
         The raw ``ADU`` array is written to disk, and the ``BUNIT`` header
-        keyword is set to ``"adu"`` to indicate the physical unit.
+        keyword is set to ``"adu"`` to indicate the physical unit.  ``ADU`` is
+        derived from the stored electron array by :attr:`ADU`.
 
         Parameters
         ----------
@@ -108,6 +115,22 @@ class Image:
     ########################################################################
 
     @property
+    def ADU(self) -> np.ndarray:
+        """The raw ADU array, derived from the stored electron array.
+
+        ``data`` holds electrons and is the only stored array.  This property
+        divides it by the gain, so a calibration step that rewrites ``data``
+        is reflected here, and therefore in :meth:`write_to_fits`.
+
+        Returns
+        -------
+        ndarray
+            A newly allocated array, in ADU.
+        """
+        gain: float = self.gain if self.gain is not None else DEFAULT_GAIN
+        return self.data / gain
+
+    @property
     def shape(self) -> tuple[int, ...] | None:
         return self.data.shape if self.data is not None else None
 
@@ -120,10 +143,17 @@ class Image:
 
     @property
     def gain(self) -> float | None:
-        value = self.header.get("GAIN", default=None)
-        if value is None or not isinstance(value, (int, float)):
-            return None
-        return float(value)
+        """Electronic gain, in electrons per ADU.
+
+        ``EGAIN`` carries the physical gain of this camera.  ``GAIN``, which
+        the acquisition software also writes, is the camera gain setting, so it
+        only serves as a fallback.
+        """
+        for keyword in ("EGAIN", "GAIN"):
+            value = self.header.get(keyword, default=None)
+            if isinstance(value, (int, float)):
+                return float(value)
+        return None
 
     @property
     def rdnoise(self) -> float | None:

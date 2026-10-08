@@ -40,7 +40,9 @@ def trace_fibers_barycenter(
     cdisp_half_width
         Half-width of the aperture for barycenter calculation.
     threshold_fraction
-        Flux threshold relative to the global image maximum.
+        Flux threshold relative to the global image maximum.  Rows whose
+        aperture sum stays below it are skipped.  The maximum is measured
+        once, over the whole image.
 
     Returns
     -------
@@ -60,6 +62,9 @@ def trace_fibers_barycenter(
     n_rows = image.shape[0]
     traces = np.full((n_fibers, n_rows), -1.0, dtype=float)
 
+    # Measured once: measuring it per row would scan the full image each time.
+    threshold = threshold_fraction * float(np.nanmax(image))
+
     for i in range(n_fibers):
         traces[i, :] = _trace_single_fiber(
             image=image,
@@ -67,7 +72,7 @@ def trace_fibers_barycenter(
             ini_guess=approx_positions[i],
             max_shift=max_shift,
             cdisp_half_width=cdisp_half_width,
-            threshold_fraction=threshold_fraction,
+            threshold=threshold,
         )
 
     return traces
@@ -76,7 +81,7 @@ def trace_fibers_barycenter(
 def fit_traces_polynomial(
     traces: NDArray[np.floating],
     poly_deg: int = 10,
-) -> tuple[NDArray[np.floating], tuple[int, int]]:
+) -> tuple[NDArray[np.floating], NDArray[np.floating]]:
     """Fit a Legendre polynomial to each fiber trace.
 
     Parameters
@@ -91,11 +96,9 @@ def fit_traces_polynomial(
     -------
     coeffs
         Array of shape ``(n_fibers, poly_deg + 1)``.
-    domain
-        ``(row_min, row_max)`` over which the polynomials are defined.
+    domains
+        Fitted row range of each fiber, shape ``(n_fibers, 2)``.
     """
     from ..core.tracemask import _fit_legendre_all
 
-    coeffs = _fit_legendre_all(traces, poly_deg)
-    n_rows = traces.shape[1]
-    return coeffs, (0, n_rows - 1)
+    return _fit_legendre_all(traces, poly_deg)

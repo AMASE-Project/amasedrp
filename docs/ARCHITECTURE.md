@@ -13,9 +13,9 @@ module lands.
 | Pre-processing | Cosmic-ray removal | Implemented |
 | Reduction | Fiber identification and tracing | Implemented |
 | Reduction | Boxcar extraction | Implemented |
-| Reduction | Optimal extraction (FOX) | Stub (raises `NotImplementedError`) |
+| Reduction | Optimal extraction (FOX) | Implemented |
 | Reduction | Spectro-perfectionism | Not started |
-| Calibration | Wavelength calibration | Implemented, not wired |
+| Calibration | Wavelength calibration | Implemented |
 | Calibration | LSF fitting | Implemented, not wired |
 | Calibration | Fiber flat-fielding | Planned |
 | Calibration | Sky subtraction | Planned |
@@ -73,24 +73,24 @@ src/amasedrp/
 │   │   ├── fiberidentifier.py  # FibersIdentifier: block + fiber detection from flat
 │   │   ├── tracemask.py        # TraceMask: Legendre polynomial trace model
 │   │   ├── fiberframe.py       # FiberFrame: extracted 2D spectra container (flux, ivar, mask, wave)
-│   │   └── fiberprofile.py     # FiberProfile: normalized cross-dispersion PSF model per fiber
 │   ├── methods/                # Atomic, stateless processing steps
 │   │   ├── fiber_tracing.py    # Barycenter tracing & Legendre fitting helpers
-│   │   ├── profile_modeling.py # Build FiberProfile from master flat
 │   │   ├── boxcar.py           # Boxcar extraction
-│   │   └── optimal.py          # Optimal extraction (stub)
+│   │   └── optimal.py          # Flat-relative optimal extraction (FOX)
 │   └── reduction.py            # Stage 2 orchestrator: identify → trace → extract
 │
 ├── calibration/                # Stage 3: Master Calibration & Data Calibration
 │   ├── __init__.py
+│   ├── calibration.py          # Wavelength solution: solve and apply
+│   ├── lines.py                # ThAr line selections, per channel
 │   ├── core/                   # Calibration-specific data models
+│   │   └── wavelengthsolution.py  # WavelengthSolution: per-fiber polynomial
 │   ├── methods/                # Calibration algorithms
 │   │   ├── fiberflat.py        # Fiber-to-fiber flat-field correction
 │   │   ├── wavelength_calibration.py # Wavelength calibration
 │   │   ├── lsf_fitting.py      # Line-spread function fitting
 │   │   ├── sky.py              # Sky background subtraction
 │   │   └── fluxcal.py          # Flux calibration
-│   └── calibration.py          # Main entry: master calibration builder
 │
 ├── utils/                      # Shared helpers
 │   ├── logging.py              # Logging configuration
@@ -165,7 +165,7 @@ def image_calibration(input_image, master_bias, master_dark, master_pixflat, ste
 
 ### Frames on disk
 
-FITS is the only on-disk format. Three classes own the I/O:
+FITS is the only on-disk format. Two classes own the I/O:
 
 - `Image` (`preprocessing/core/image.py`) reads and writes single 2-D frames.
   `Image.from_fits(filename)` takes the physical unit from the `BUNIT`
@@ -176,11 +176,6 @@ FITS is the only on-disk format. Three classes own the I/O:
   spectra. `to_fits(path)` writes a primary HDU that holds metadata only
   (`N_FIBERS`, `N_WAVE` and the `meta` dictionary), then one `ImageHDU` per
   array (`WAVE`, `FLUX`, `IVAR`, `MASK`) and a `BinTableHDU` named `FIBERMAP`.
-- `FiberProfile` (`reduction/core/fiberprofile.py`) reads and writes the
-  cross-dispersion profile. `to_fits(path)` writes a primary HDU with the
-  metadata (`N_FIBERS`, `N_ROWS`, `N_OFFSET` and the `meta` dictionary), then
-  an `ImageHDU` named `PROFILE`, an `ImageHDU` named `XOFFSETS`, and a
-  `BinTableHDU` named `FIBERMAP` when a fiber map is attached.
 
 None of these classes encodes a file name. The caller chooses the path. There
 is no file-naming convention yet.
@@ -226,35 +221,42 @@ it.
 | `Image.__init__` | `unit` is `"adu"` or `"electron"` | `ValueError`; warns when the data holds negative values |
 | `Image.cutout` | image has data, cutout is inside the frame | `ValueError` |
 | `_image_calibration` | inputs are `Image` objects with data, shapes agree, required `EXPTIME` values are positive, steps are valid and their dependencies are requested | `ValueError` |
-| `FibersIdentifier(strict=True)` | block and fiber counts match the expectation | `ValueError` |
+| `FibersIdentifier(strict=True)` | block and fiber counts match the expectation | `ValueError`; with `strict=False` the run continues and the affected fibers get `VALID = False` |
 | `FiberMap.validate` | required columns present, `FIBERID` monotonic and unique | `ValueError` |
-| `FiberProfile` | `profile` is 3-D, `x_offsets` is 1-D, their shapes agree | `ValueError` |
-| `extract_spectra` | `method` is known, `fiber_profile` is given for `"optimal"` | `ValueError` |
+| `extract_spectra` | `method` is known, `flat_image` is given for `"optimal"`, and `variance` is not given for `"optimal"` | `ValueError` |
+| `extract_optimal` | `flat_image` matches `image`, `trace_positions` matches `image`, `gain` is positive, `read_noise` is not negative | `ValueError` |
+| `WavelengthSolution` | `poly_kind` is known, `coeffs` is 2-D, `fiber_ids` and `scores` match the coefficient rows | `ValueError` |
+| `solve_wavelength_solution` | frame carries a fiber map, fiber counts agree, `poly_kind` is known, line lists are not empty, `min_calibrated_fraction` lies in `[0, 1]` | `ValueError`; `RuntimeError` when the reference fiber cannot be calibrated or the calibrated fraction falls below `min_calibrated_fraction` |
+| `apply_wavelength_solution` | solution and frame hold the same number of fibers | `ValueError` |
 
-Unimplemented entry points raise `NotImplementedError` instead of returning a
-wrong result: currently `optimal.extract_optimal`, and therefore
-`run_reduction()` with its default `method="optimal"`.
+No entry point raises `NotImplementedError` any more. `calibration/` holds no
+orchestrator yet, so its two methods cannot be reached from a public function.
 
 ### Bad pixels travel as a bitmask
 
-`boxcar.extract_boxcar` does not raise on bad data. It returns a `uint32` mask
-next to the flux:
+`boxcar.extract_boxcar` and `optimal.extract_optimal` do not raise on bad
+data. They return a `uint32` mask next to the flux. Both methods set the same
+bits:
 
 | Bit | Constant | Meaning |
 | --- | --- | --- |
 | 1 | `MASK_BAD_TRACE` | trace centre is not finite |
 | 2 | `MASK_NO_PIXELS` | aperture covers no usable pixel |
-| 4 | `MASK_BAD_VARIANCE` | variance is zero or not finite; `ivar` is set to 0 |
+| 4 | `MASK_BAD_VARIANCE` | variance is zero or not finite; `ivar` is set to 0. For FOX, also set where the flat holds no positive sample to convert the relative spectrum. |
 
 ### Known exception to "never fail silently"
 
-Two bare `except:` clauses swallow every error and return a sentinel instead:
+One bare `except:` clause swallows every error and returns a sentinel instead:
 
-- `wavelength_calibration.fitting` returns `score = -1` with zeroed coefficients.
 - `lsf_fitting.gaussian_fitting` returns `NaN` for the FWHM and the parameters.
 
-Both hide real errors. They contradict the rule in `AGENTS.md` and are the
-first place to fix when the calibration stage is wired up.
+It hides real errors and contradicts the rule in `AGENTS.md`. Fix it when the
+LSF driver is written.
+
+The matching clause in `wavelength_calibration.fitting` was removed: a
+combination that cannot be fitted now scores `nan`, which `np.nanargmin`
+skips. Before that fix, a single failed combination won the comparison and the
+caller got a dummy solution.
 
 ---
 
@@ -276,6 +278,13 @@ result. It sits behind parameters, so the same call can run serially:
 Rule: keep joblib-style parallel dispatch inside `methods/` and behind a
 parameter. `core/` may compile a loop with numba, but it does not dispatch
 parallel work. A serial call must give the same numbers as a parallel one.
+
+Second rule: batch the work. A task must be big enough that pickling its
+arguments costs less than running it. One task per candidate line assignment
+made joblib pass the reference wavelengths, the peak list and a polynomial
+class 843 999 times, and reached only 3.0x on 12 cores. Batches of a few
+thousand candidates reach 4.7x. Batch in *contiguous* slices: strided slices
+make the concatenated results land out of order.
 
 A caveat on the wrapper: it guesses the call form by trying
 `function(*input)` and falling back to `function(input)` on `TypeError`. A
@@ -315,13 +324,12 @@ Master Flat Image
            ├──────────────────────────────────────┐
            ▼                                      ▼
 ┌─────────────────────────┐          ┌─────────────────────────┐
-│ build_fiber_profile()   │          │ Science Image           │
-│ (methods/profile_)      │          │ (from preprocessing/)   │
-│  modeling.py)           │          └──────────┬──────────────┘
-└───────────┬─────────────┘                     │
+│ Flat image              │          │ Science Image           │
+│ (from preprocessing/)   │          │ (from preprocessing/)   │
+└───────────┬─────────────┘          └──────────┬──────────────┘
             ▼                                   ▼
-      FiberProfile                        TraceMask.eval()
-      (profile, x_offsets)                (trace_positions)
+   flat weights (FOX only)               TraceMask.eval()
+                                         (trace_positions)
             │                                   │
             └───────────────┬───────────────────┘
                             ▼
@@ -359,13 +367,6 @@ Inspired by `desispec.Frame` and `lvmdrp.RSS`.
 
 **Why not `lvmdrp.RSS`?** `RSS` in lvmdrp inherits from a massive `FiberRows` + `Header` hierarchy. We prefer **composition** to keep the class lightweight and explicit.
 
-#### `FiberProfile` (`core/fiberprofile.py`)
-Required for **flat-relative optimal extraction** (see MaNGA `extract_row`).
-- **Storage:** `profile[n_fibers, n_rows, n_offsets]`, `x_offsets[n_offsets]`
-- **Role:** Normalized cross-dispersion PSF measured from a master flat.
-- **Builder:** `FiberProfile.from_flat(flat_image, tracemask, fibermap, half_width=5)`
-- **Invariant:** `sum(profile, axis=-1) == 1` for every fiber/row.
-
 ### 2.3 `methods/` — Algorithms
 
 #### `fiber_tracing.py`
@@ -377,23 +378,26 @@ Required for **flat-relative optimal extraction** (see MaNGA `extract_row`).
 - `extract_boxcar(image, trace_positions, aperture_radius, variance=None, mask=None)` → flux, ivar, mask
   - Simple aperture sum. Use for QA, quick-look, and as fallback.
 
-#### `optimal.py` — stub
-- `extract_optimal(image, trace_positions, fiber_profile, ...)` raises `NotImplementedError`. The signature is fixed; the body is not written.
+#### `optimal.py`
+- `extract_optimal(image, flat_image, trace_positions, aperture_radius=3, gain=1.0, read_noise=1.0, mask=None)` → flux, ivar, mask
+  - Flat-relative optimal extraction (Naylor 1998). The flat carries the
+    cross-dispersion profile, so weighting the science by the flat gives the
+    best signal-to-noise ratio. A smoothed boxcar extraction of the flat then
+    removes the lamp spectrum and returns the spectrum to the boxcar scale.
+  - The noise model is built from the science counts,
+    `var = gain * image + read_noise**2`. Negative pixels are clipped to zero
+    because they come from an over-subtracted bias.
 
 #### Orchestration
-- `extract_spectra(image, tracemask, fibermap, method="boxcar", ...)` → `FiberFrame`, implemented in `reduction.py` (see 2.4). It evaluates trace positions, dispatches to boxcar or optimal, and packages the result into a `FiberFrame`.
-- `run_reduction()` defaults to `method="optimal"`, so it raises until optimal extraction lands. `run_quick_reduction()` uses boxcar and works.
+- `extract_spectra(image, tracemask, fibermap, method="boxcar", flat_image=None, ...)` → `FiberFrame`, implemented in `reduction.py` (see 2.4). It evaluates trace positions, masks the rows that fall outside each fiber's fitted range, dispatches to boxcar or optimal, and packages the result into a `FiberFrame`.
+- `run_reduction()` defaults to `method="optimal"`. `run_quick_reduction()` uses boxcar and works.
 
-**Design note:** The optimal extractor should follow MaNGA's iterative rejection:
-1. Fit model to row.
-2. Compute residuals.
-3. Mask the single worst pixel in each contiguous bad group.
-4. Re-fit until convergence or `maxiter`.
-
-#### `profile_modeling.py`
-- `build_fiber_profile(flat_image, tracemask, fibermap, half_width)` → `FiberProfile`
-  - For each fiber/row, cut out a cross-dispersion slice centered on the trace, normalize.
-- `normalize_profile(profile)` → ensure sum-to-one.
+**Design note:** FOX was chosen over MaNGA-style iterative profile fitting
+because it is the algorithm the AMASE prototype used, so its output can be
+compared against the 2025-07 collimator-sweep reductions. The prototype design
+carried a normalized `FiberProfile` PSF model; FOX does not need one, because
+the flat itself is the profile. That model was deleted with the
+profile-fitting design.
 
 ### 2.4 Orchestrator (`reduction.py`)
 
@@ -407,15 +411,13 @@ fibermap, tracemask = identify_and_trace_fibers(
     n_fibers_per_block_expected=29,
 )
 
-# Profile and extraction
-fiber_profile = build_fiber_profile(flat_image, tracemask, fibermap)
-
+# Extraction
 fiber_frame = extract_spectra(
     image=science_image,
     tracemask=tracemask,
     fibermap=fibermap,
     method="optimal",
-    fiber_profile=fiber_profile,
+    flat_image=flat_image,
 )
 ```
 
@@ -423,9 +425,10 @@ fiber_frame = extract_spectra(
 
 | Decision | Rationale |
 |----------|-----------|
-| **Separate `FiberProfile` from `TraceMask`** | `TraceMask` answers "where is the fiber?" (geometry). `FiberProfile` answers "what is its shape?" (PSF). Decoupling lets us update one without the other. |
 | **`FiberFrame` as 2-D array `(fiber, wave)`** | Matches `desispec.Frame` and `lvmdrp.RSS`. Each row is one fiber's 1-D spectrum. Easy to feed into `calibration/` (wavelength, sky, flux cal). |
-| **Optimal extraction uses flat-derived profile** | MaNGA and lvmdrp both do this. It avoids assuming a theoretical Gaussian and adapts to the real instrument PSF. |
+| **Optimal extraction is flat-relative (FOX)** | The flat already carries the cross-dispersion profile of every fiber, so no separate PSF model is needed. It is also the algorithm the prototype used, so the output can be compared against the 2025-07 collimator-sweep reductions. |
+| **One aperture convention for both methods** | Both boxcar and FOX use a fixed-width aperture, `round(position) ± aperture_radius`. The prototype rounded the edges with `floor`/`ceil`, which makes the aperture width follow the fractional trace position. That is a rounding artefact, and two conventions in one package would make the two extractors incomparable. This costs a systematic ~6% against the prototype. |
+| **Each fiber keeps its own fit domain** | A trace is fitted over the rows where it was actually traced. Handing every fiber the full image row range would evaluate the polynomial far outside its fit, which moves the trace by up to 28 pixels on the sweep frames. `extract_spectra` masks the rows outside the fitted range instead of extracting them. |
 | **Boxcar as first-class citizen** | Not just a placeholder. Needed for: (1) quick-look QA, (2) identifying bright fibers before optimal extraction (MaNGA `find_whopping`), (3) fallback when optimal fails. |
 | **No `Aperture` class for boxcar** | `lvmdrp` has a complex `Aperture` class with sub-pixel integration. For a first implementation, an integer `aperture_radius` is sufficient and far simpler. Upgrade path: replace the integer with a `PixelAperture` object later. |
 
@@ -439,41 +442,62 @@ implementation yet; see the Status table above.
 
 ### 3.1 Data Flow
 
-The implemented part is a wavelength solution for one extracted 1-D spectrum:
-
 ```
-Extracted 1-D arc spectrum
+Extracted arc spectra                (reduction/, one FiberFrame + TraceMask)
        │
        ▼
-  detect_lines()                     ← methods/wavelength_calibration.py
-  (peak positions in the uncalibrated spectrum)
+  solve_wavelength_solution()        ← calibration.py
+  pick the longest-trace fiber, run a full search over line combinations,
+  then propagate outward: each fiber starts from its solved neighbour
        │
        ▼
-  find_poss_wavelength_solution()
-  (enumerate reference-line / peak combinations, fit a Legendre
-   polynomial per combination, score by RMSE, keep the best)
+  WavelengthSolution                 ← core/wavelengthsolution.py
+  (coeffs, fiber_ids, poly_kind, scores)
        │
        ▼
-  refine_poss_solution()
-  (least-squares refinement, poss_poly = a * guess + b)
+  apply_wavelength_solution(frame, solution)
        │
        ▼
-  wavelength solution, as a polynomial
+  FiberFrame with wave (n_fibers, n_wave) and fibermap["WAVCAL_SCORE"]
 ```
 
-There is no Stage 3 orchestrator yet, so a caller wires these steps itself and
-applies the polynomial to science spectra.
+The full search only runs for the reference fiber.  Every other fiber is
+refined from its neighbour solution, which is far cheaper and keeps
+neighbouring fibers consistent.  A fiber whose trace is shorter than 70% of
+the reference trace, or whose refinement fails, inherits the neighbour
+solution and is marked ``score = -1``.
+
+`calibration/lines.py` holds the ThAr line selections of both channels, as
+`known_wls` (used for scoring), `poss_wls` (used to enumerate candidates) and
+`lsf_wls` (isolated enough for a line-spread fit).  The lists are selections
+for this spectrograph, not a lamp atlas.
 
 ### 3.2 `methods/` — Algorithms
 
 #### `wavelength_calibration.py`
 - `detect_lines(spectrum, n_strongest_lines=20, n_all_lines=100)` → positions of the strongest peaks and of all peaks.
-- `calculate_fitting_score(poss_poly, known_wls, all_peak_ys)` → RMSE-like score between the reference lines and their nearest peaks.
-- `find_poss_wavelength_solution(poss_wls, poss_ys, known_wls, all_peak_ys, ...)` → best polynomial and its score, by enumerating combinations. `full_search=True` lets the degree grow beyond `min_deg`.
+- `calculate_fitting_score(poss_poly, known_wls, all_peak_ys)` → RMSE-like score between the reference lines and their nearest peaks, or `nan` when no residual survives the outlier cut.
+- `score_combination(ys, wls, known_wls, all_peak_ys, ...)` → score of one candidate pairing, without converting the coefficients. `convert()` costs about half of one candidate, so only the winner pays for it.
+- `find_poss_wavelength_solution(poss_wls, poss_ys, known_wls, all_peak_ys, ...)` → best polynomial and its score, by enumerating combinations. `full_search=True` lets the degree grow beyond `min_deg`. A negative score means no combination produced a usable fit.
 - `refine_poss_solution(guess_poss_poly, known_wls, all_peak_ys)` → polynomial refined by least squares.
 - `wavelength_calibration(poss_wls, poss_ys, known_wls, all_peak_ys, ...)` → final `(polynomial, score)`, with optional iterative refinement.
-- `inv_poss_poly(poss_poly, wl, y_min=0., y_max=9600., atol=1e-5)` → y coordinate of a given wavelength, by bisection.
-- Candidate combinations run in parallel through `utils/parallel_processing.run` (joblib).
+- `inv_poss_poly(poss_poly, wl, y_min=0., y_max=9600., atol=1e-5)` → y coordinate of a given wavelength, by bisection. The row limits default to the sweep-frame height, so pass `y_max` for another detector.
+- Candidates are scored in parallel through `utils/parallel_processing.run` (joblib), in contiguous batches of a few thousand. On the 2025-07 data the reference fiber of one frame enumerates 843 999 candidates, which took 63 s one-task-per-candidate and 14 s batched.
+
+**Failure convention.** A combination that cannot be fitted scores `nan`, not
+`-1`: `nan` is skipped by `np.nanargmin`, whereas a numeric sentinel would win
+the comparison and hand back a dummy solution. A score of `-1` is reserved for
+"no combination worked at all".
+
+**Status of the acceptance rate.** `solve_wavelength_solution` warns once per
+fiber it could not calibrate, and marks that fiber with `score = -1`.
+`WavelengthSolution.calibrated_fraction` reports the share that succeeded, and
+the `min_calibrated_fraction` argument turns a shortfall into a
+`RuntimeError`.  A focus sweep leaves that argument unset, because at strong
+defocus most fibers legitimately fail: on the 2025-07 sweep the fraction fell
+from 523 of 539 fibers at good focus to 119 of 539.  An entry point that serves
+real observations must pass a value close to one; see the wavelength paragraph
+in `AGENTS.md`.
 
 #### `lsf_fitting.py`
 - `lsf_fitting(spectrum, spectrum_wls, target_wl)` → FWHM of the line, through `lsf_gaussian_fitting` with `cutout_wl_half_width=3` and `adjust_target_wl=True`.
@@ -482,9 +506,8 @@ applies the polynomial to science spectra.
 
 ### 3.3 Planned Modules
 
-`fiberflat.py`, `sky.py`, `fluxcal.py` and the `calibration.py` orchestrator are
-empty files. `calibration/core/` holds no data models yet. These are next work,
-not a design to follow.
+`fiberflat.py`, `sky.py` and `fluxcal.py` are empty files, and no LSF driver
+is written yet.  These are next work, not a design to follow.
 
 ---
 

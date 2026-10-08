@@ -46,24 +46,35 @@ def gaussian(x, amplitude, center, sigma, offset):
 
 
 def gaussian_fitting(cutout_spectrum, cutout_spectrum_wls, target_wl):
-    # fit a Gaussian to the cutout spectrum
+    """Fit a Gaussian to a cut-out arc line.
+
+    Returns
+    -------
+    target_fwhm
+        Full width at half maximum of the fitted Gaussian, or ``nan`` when the
+        fit did not converge.
+    target_popt
+        The four Gaussian parameters, all ``nan`` when the fit did not
+        converge.
+    """
+    unset = np.array([np.nan, np.nan, np.nan, np.nan])
+    # initial guess
+    ini_mu = target_wl
+    ini_sigma = np.ptp(cutout_spectrum_wls) / 5.
+    ini_offset = np.nanmedian(cutout_spectrum) * 0.2
+    ini_a = np.nanmax(cutout_spectrum - ini_offset)
+    initial_guess = [ini_a, ini_mu, ini_sigma, ini_offset]
+    # fitting
+    x_fit = cutout_spectrum_wls
+    y_fit = cutout_spectrum
     try:
-        # initial guess
-        ini_mu = target_wl
-        ini_sigma = np.ptp(cutout_spectrum_wls) / 5.
-        ini_offset = np.nanmedian(cutout_spectrum) * 0.2
-        ini_a = np.nanmax(cutout_spectrum - ini_offset)
-        initial_guess = [ini_a, ini_mu, ini_sigma, ini_offset]
-        # fitting
-        x_fit = cutout_spectrum_wls
-        y_fit = cutout_spectrum
         popt, _ = curve_fit(gaussian, x_fit, y_fit, p0=initial_guess)
-        # FWHM of the fitted Gaussian
-        target_popt = popt.copy()
-        target_fwhm = 2.355 * np.abs(target_popt[2])
-    except:  # noqa: E722
-        target_popt = np.array([np.nan, np.nan, np.nan, np.nan])
-        target_fwhm = np.nan
+    except (RuntimeError, ValueError, TypeError):
+        # the line is too faint, too noisy, or the guess was poor
+        return np.nan, unset
+    # FWHM of the fitted Gaussian
+    target_popt = popt.copy()
+    target_fwhm = 2.355 * np.abs(target_popt[2])
     return target_fwhm, target_popt
 
 

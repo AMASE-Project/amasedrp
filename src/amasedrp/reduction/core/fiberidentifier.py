@@ -14,6 +14,7 @@ is handled by :class:`TraceMask`.
 
 from __future__ import annotations
 
+import warnings
 from typing import Any
 
 import numpy as np
@@ -47,8 +48,11 @@ class FibersIdentifier:
     n_fibers_per_block_expected
         Expected number of fibers per block.
     strict
-        If ``True`` (default), raise :class:`ValueError` when the detected
-        number of blocks or fibers does not match the expectation.
+        If ``True`` (default), raise :class:`ValueError` when the number of
+        blocks, or the number of fibers inside a block, does not match the
+        expectation.  If ``False``, warn instead, keep the fibers that were
+        found, and set ``VALID = False`` on the fibers of the affected
+        block.
 
     Examples
     --------
@@ -102,7 +106,9 @@ class FibersIdentifier:
         band_half_width
             Half-height of the band (in rows) collapsed to form the profile.
         block_valley_threshold_frac
-            Valley depth threshold relative to the median profile.
+            Valley depth threshold relative to the median profile.  A valley
+            qualifies as a block edge only if it drops below this fraction
+            of the median.
         fiber_peak_height_frac
             Peak height threshold relative to the median block profile.
         smooth_sigma_factor
@@ -112,7 +118,10 @@ class FibersIdentifier:
         Returns
         -------
         FiberMap
-            Structured table with one row per detected fiber.
+            Structured table with one row per detected fiber.  Fibers of a
+            block whose fiber count differs from
+            *n_fibers_per_block_expected* have ``VALID = False`` whenever
+            ``strict`` is ``False``.
         """
         # Step 1: extract profile
         self._extract_profile(center_row, band_half_width)
@@ -121,7 +130,7 @@ class FibersIdentifier:
         self._identify_blocks(threshold_frac=block_valley_threshold_frac)
 
         # Step 3: identify fibers within blocks
-        peak_xs, peak_block_ids = self._identify_fibers(
+        peak_xs, peak_block_ids, peak_valid = self._identify_fibers(
             peak_height_frac=fiber_peak_height_frac,
             smooth_sigma_factor=smooth_sigma_factor,
         )
@@ -131,6 +140,7 @@ class FibersIdentifier:
         fiber_ids = np.arange(n_fibers, dtype=int)
         block_ids = np.asarray(peak_block_ids, dtype=int)
         approx_x = np.asarray(peak_xs, dtype=float)
+        valid = np.asarray(peak_valid, dtype=bool)
         center_row_used = self._center_row
 
         return FiberMap.from_arrays(
@@ -138,6 +148,7 @@ class FibersIdentifier:
             block_ids=block_ids,
             approx_x=approx_x,
             center_row=center_row_used,
+            valid=valid,
         )
 
     # ------------------------------------------------------------------ #
@@ -166,21 +177,30 @@ class FibersIdentifier:
 
     def _identify_blocks(self, threshold_frac: float) -> None:
         profile = self._profile
+        xs = self._profile_xs
 
-        block_width_estimate = len(profile) / self.n_blocks_expected
-        # sigma = block_width/6 suppresses noise while keeping edges sharp
-        smoothed = gaussian_filter1d(profile, sigma=block_width_estimate / 6)
+        # Blocks are separated by valleys in the cross-dispersion profile.
+        # The valleys sit roughly half a block width apart, so a minimum
+        # separation rejects the valleys that belong to individual fibers.
+        # The profile is not smoothed here: smoothing fills the gaps that
+        # separate the blocks.
+        min_separation = len(profile) / self.n_blocks_expected / 2.0
+        valleys, _ = find_peaks(-profile, distance=min_separation)
+        edges = xs[valleys]
 
-        threshold = np.nanmax(smoothed) * threshold_frac
-        above = smoothed > threshold
-        transitions = np.where(np.diff(above.astype(int)) != 0)[0] + 1
+        # Keep only the valleys that fall deep enough below the median.
+        threshold = np.nanmedian(profile) * threshold_frac
+        edges = edges[profile[edges] <= threshold]
 
-        if above[0]:
-            transitions = np.concatenate([[0], transitions])
-        if above[-1]:
-            transitions = np.concatenate([transitions, [len(profile) - 1]])
+        # Keep only the edges whose neighbouring gap holds actual fibers.
+        keep: list[int] = []
+        for i in range(len(edges) - 1):
+            between = np.nanmedian(profile[edges[i]:edges[i + 1]])
+            if between >= threshold:
+                keep += [i, i + 1]
+        edges = edges[np.unique(keep)]
 
-        n_found = len(transitions) // 2
+        n_found = len(edges) - 1
         if n_found != self.n_blocks_expected:
             msg = (
                 f"Expected {self.n_blocks_expected} blocks, "
@@ -191,13 +211,13 @@ class FibersIdentifier:
 
         # Build block metadata
         self._blocks = []
-        for i in range(n_found):
+        for i in range(max(n_found, 0)):
             self._blocks.append(
                 {
                     "block_id": i,
-                    "edge_left": int(transitions[2 * i]),
-                    "edge_right": int(transitions[2 * i + 1]),
-                    "center": float(np.mean(transitions[2 * i : 2 * i + 2])),
+                    "edge_left": int(edges[i]),
+                    "edge_right": int(edges[i + 1]),
+                    "center": float(np.mean(edges[i : i + 2])),
                 }
             )
 
@@ -209,13 +229,39 @@ class FibersIdentifier:
         self,
         peak_height_frac: float,
         smooth_sigma_factor: float,
-    ) -> tuple[list[float], list[int]]:
-        """Return (peak_x_positions, block_ids_for_each_peak)."""
+    ) -> tuple[list[float], list[int], list[bool]]:
+        """Locate fiber peaks inside every block.
+
+        Parameters
+        ----------
+        peak_height_frac
+            Peak height threshold, relative to the median of the block.
+        smooth_sigma_factor
+            Gaussian smoothing sigma = block_width / (n_fibers_expected *
+            smooth_sigma_factor).
+
+        Returns
+        -------
+        peak_xs
+            Cross-dispersion position of each detected fiber peak.
+        peak_block_ids
+            Block ID of each detected fiber peak.
+        peak_valid
+            ``True`` when the block holds the expected number of fibers.
+            Every fiber of a block whose count differs is marked ``False``.
+
+        Raises
+        ------
+        ValueError
+            If ``strict`` is ``True`` and a block holds a number of fibers
+            other than *n_fibers_per_block_expected*.
+        """
         profile = self._profile
         xs = self._profile_xs
 
         peak_xs: list[float] = []
         peak_block_ids: list[int] = []
+        peak_valid: list[bool] = []
 
         for block in self._blocks:
             bid = block["block_id"]
@@ -223,31 +269,42 @@ class FibersIdentifier:
             block_xs = xs[lo:hi]
             block_profile = profile[lo:hi]
 
-            if len(block_xs) == 0:
-                continue
-
-            # Smooth
-            sigma = (
-                np.ptp(block_xs)
-                / self.n_fibers_per_block_expected
-                / smooth_sigma_factor
-            )
-            smoothed = gaussian_filter1d(block_profile, sigma=sigma)
-
-            # Find peaks
-            height = np.nanmedian(smoothed) * peak_height_frac
-            distance = max(1, int(np.ptp(block_xs) / self.n_fibers_per_block_expected * 0.5))
-            peaks, _ = find_peaks(smoothed, height=height, distance=distance)
+            peaks = np.array([], dtype=int)
+            if len(block_xs) > 0:
+                sigma = (
+                    np.ptp(block_xs)
+                    / self.n_fibers_per_block_expected
+                    / smooth_sigma_factor
+                )
+                smoothed = gaussian_filter1d(block_profile, sigma=sigma)
+                height = np.nanmedian(smoothed) * peak_height_frac
+                distance = max(
+                    1,
+                    int(
+                        np.ptp(block_xs)
+                        / self.n_fibers_per_block_expected
+                        * 0.5
+                    ),
+                )
+                peaks, _ = find_peaks(
+                    smoothed, height=height, distance=distance
+                )
 
             n_found = len(peaks)
-            if n_found != self.n_fibers_per_block_expected and self.strict:
-                raise ValueError(
-                    f"Block {bid}: expected {self.n_fibers_per_block_expected} "
-                    f"fibers, found {n_found}."
+            block_valid = n_found == self.n_fibers_per_block_expected
+            if not block_valid:
+                msg = (
+                    f"Block {bid}: expected "
+                    f"{self.n_fibers_per_block_expected} fibers, "
+                    f"found {n_found}."
                 )
+                if self.strict:
+                    raise ValueError(msg)
+                warnings.warn(msg, RuntimeWarning, stacklevel=2)
 
             for p in peaks:
                 peak_xs.append(float(block_xs[p]))
                 peak_block_ids.append(bid)
+                peak_valid.append(block_valid)
 
-        return peak_xs, peak_block_ids
+        return peak_xs, peak_block_ids, peak_valid

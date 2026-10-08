@@ -64,42 +64,48 @@ def extract_boxcar(
     ivar = np.zeros((n_fibers, n_rows), dtype=np.float64)
     out_mask = np.zeros((n_fibers, n_rows), dtype=np.uint32)
 
+    # One aperture shape per fiber, evaluated for every row at once.  Looping
+    # over rows in Python costs about 20 s on a 9600-row frame.
+    offsets = np.arange(-aperture_radius, aperture_radius + 1)
+    rows = np.arange(n_rows)
+
     for i in range(n_fibers):
-        for r in range(n_rows):
-            center = trace_positions[i, r]
-            if not np.isfinite(center):
-                out_mask[i, r] |= MASK_BAD_TRACE
-                continue
+        centers = trace_positions[i]
+        traced = np.isfinite(centers)
+        out_mask[i, ~traced] |= MASK_BAD_TRACE
+        if not traced.any():
+            continue
 
-            col_center = int(round(center))
-            col_start = max(0, col_center - aperture_radius)
-            col_end = min(n_cols, col_center + aperture_radius + 1)
+        row_idx = rows[traced][:, None]
+        cols = (
+            np.round(centers[traced]).astype(int)[:, None]
+            + offsets[None, :]
+        )
+        inside = (cols >= 0) & (cols < n_cols)
+        cols = np.clip(cols, 0, n_cols - 1)
 
-            if col_start >= col_end:
-                out_mask[i, r] |= MASK_NO_PIXELS
-                continue
+        usable = inside
+        if mask is not None:
+            usable = usable & ~mask[row_idx, cols]
 
-            pixel_mask = np.ones(col_end - col_start, dtype=bool)
-            if mask is not None:
-                pixel_mask = ~mask[r, col_start:col_end]
+        # A row with no usable pixel is flagged and left at zero flux.
+        no_pixels = ~usable.any(axis=1)
+        out_mask[i, rows[traced][no_pixels]] |= MASK_NO_PIXELS
 
-            if not pixel_mask.any():
-                out_mask[i, r] |= MASK_NO_PIXELS
-                continue
+        pixel_values = np.where(usable, image[row_idx, cols], np.nan)
+        flux_values = np.nansum(pixel_values, axis=1)
+        flux[i, rows[traced]] = flux_values
 
-            pix = image[r, col_start:col_end]
-            flux_val = float(np.nansum(pix[pixel_mask]))
-            flux[i, r] = flux_val
+        if variance is not None:
+            variance_values = np.nansum(
+                np.where(usable, variance[row_idx, cols], np.nan), axis=1
+            )
+        else:
+            # Placeholder when the caller supplies no variance image.
+            variance_values = np.maximum(np.abs(flux_values), 1.0)
 
-            if variance is not None:
-                var_val = float(np.nansum(variance[r, col_start:col_end][pixel_mask]))
-            else:
-                var_val = max(abs(flux_val), 1.0)
-
-            if var_val > 0 and np.isfinite(var_val):
-                ivar[i, r] = 1.0 / var_val
-            else:
-                out_mask[i, r] |= MASK_BAD_VARIANCE
-                ivar[i, r] = 0.0
+        good = ~no_pixels & (variance_values > 0) & np.isfinite(variance_values)
+        ivar[i, rows[traced][good]] = 1.0 / variance_values[good]
+        out_mask[i, rows[traced][~good]] |= MASK_BAD_VARIANCE
 
     return flux, ivar, out_mask

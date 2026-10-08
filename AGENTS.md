@@ -9,6 +9,26 @@ The default fiber configuration is 19 blocks of 29 fibers, which matches the
 superseded Nikon-based design. The 2025 CDR baseline is 22 blocks of 25
 fibers. Confirm which generation is targeted before changing a default.
 
+## FITS metadata
+
+The AMASE metadata scheme is not finished, so FITS header keyword names and
+values are not a settled contract. Expect missing cards, unexpected values,
+and the same physical quantity written differently in different channels.
+
+Example from the 2025-07 collimator sweep: `IMAGETYP` reads `'Light Frame'`
+for blue arcs and `'Flat Field'` for blue flats, but `'LIGHT'` for both red
+arcs and red flats. Selecting red flats by `IMAGETYP` returns the arcs as
+well, and reports no error.
+
+So never treat a header keyword as reliable. Validate at the FITS boundary,
+and prefer a keyword the instrument actually writes over the conventional one.
+`LAMP` separates arcs from flats in both channels of the sweep data, so it is
+the better key there.
+
+Keep the mapping from a physical quantity to its keyword in one documented
+place. When a header is wrong, repair it in one explicit step and record what
+changed, instead of compensating at every call site.
+
 ## Priority
 
 `amasedrp` is the pipeline of a science project. Its results must be
@@ -25,6 +45,14 @@ Readability wins over robustness, not over correctness.
 
 A silent wrong reduction is the worst outcome, so validate at the FITS
 boundary and raise instead of guessing.
+
+A failed wavelength solution needs care, because the same failure means two
+different things. During a focus sweep it is expected: at strong defocus the
+arc lines broaden and blend, and the line matching cannot succeed. During a
+real observation it must not happen, and it must not pass unnoticed, because
+it points at a software or hardware fault. The pipeline therefore reports the
+fraction of fibers it calibrated, and an observer-facing entry point must
+surface that fraction instead of reducing quietly with a partial solution.
 
 ## Rules
 

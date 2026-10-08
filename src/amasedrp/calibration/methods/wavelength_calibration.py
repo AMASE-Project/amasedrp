@@ -8,8 +8,9 @@
 '''
 
 import numpy as np
+import os
+import warnings
 from itertools import combinations
-from itertools import product
 from scipy.signal import find_peaks
 from scipy.ndimage import gaussian_filter1d
 from scipy.optimize import minimize
@@ -45,6 +46,44 @@ def detect_lines(spectrum, n_strongest_lines=20, n_all_lines=100):
     return strong_peak_ys, strong_peak_heights, all_peak_ys, all_peak_heights
 
 
+def _percentile_bounds(values, low_percent=16.0, high_percent=84.0):
+    """Return two linear-interpolation percentiles from a single sort.
+
+    ``np.nanpercentile`` costs about 18 us per call on a 19-element array,
+    which dominates the scoring of a candidate line assignment.  Sorting once
+    and interpolating by hand is about 1 us for the same answer.
+
+    Parameters
+    ----------
+    values
+        1-D array of finite values.
+    low_percent, high_percent
+        Percentiles to return.
+
+    Returns
+    -------
+    tuple of float
+        The two percentiles.
+    """
+    ordered = np.sort(values)
+    n = ordered.size
+    bounds = []
+    for percent in (low_percent, high_percent):
+        position = (n - 1) * percent / 100.0
+        lower = int(position)
+        if lower + 1 >= n:
+            bounds.append(float(ordered[-1]))
+        else:
+            weight = position - lower
+            bounds.append(
+                float(
+                    ordered[lower]
+                    + (ordered[lower + 1] - ordered[lower]) * weight
+                )
+            )
+    return bounds[0], bounds[1]
+
+
 def calculate_fitting_score(poss_poly, known_wls, all_peak_ys):
     """
     Suppose that the (strong-enough) known lines with "known_wls" should be
@@ -53,19 +92,87 @@ def calculate_fitting_score(poss_poly, known_wls, all_peak_ys):
     based on the residuals between the known wavelengths and the fitted
     wavelengths at the detected peak y coordinates.
     The smaller the score, the better the fitting.
+
+    Returns
+    -------
+    float
+        The score, or ``nan`` when no residual survives the outlier cut.
+        A ``nan`` score means the fit could not be judged, not that it is
+        good: ``nan`` is skipped by ``np.nanargmin``, whereas a numeric
+        sentinel would win the comparison.
     """
+    if len(all_peak_ys) == 0 or len(known_wls) == 0:
+        return np.nan
     all_peak_wls = poss_poly(all_peak_ys)
     residuals = np.abs(all_peak_wls[:, None] - known_wls[None, :])
+    # no usable residual at all: guard before the reduction, which would warn
+    if np.all(np.isnan(residuals)):
+        return np.nan
     # residuals between known lines and their nearest peaks
     min_res = np.nanmin(residuals, axis=0)  # [wl unit]
+    min_res = min_res[~np.isnan(min_res)]
+    if min_res.size == 0:
+        return np.nan
     # remove outliers
-    cond = np.nanpercentile(min_res, 16) <= min_res
-    cond &= min_res <= np.nanpercentile(min_res, 84)
-    min_res = min_res[cond]
-    del cond
+    low, high = _percentile_bounds(min_res)
+    min_res = min_res[(min_res >= low) & (min_res <= high)]
+    # every residual fell outside the percentile window
+    if min_res.size == 0:
+        return np.nan
     # calculate the score (kind of "RMSE")
-    score = np.sqrt(np.sum(min_res ** 2)) / len(min_res)  # [wl unit]
+    score = np.sqrt(np.sum(min_res ** 2)) / min_res.size  # [wl unit]
     return score
+
+
+def score_combination(
+        ys: list[float],
+        wls: list[float],
+        known_wls: list[float],
+        all_peak_ys: list[float],
+        deg: int = 3,
+        poly_form=np.polynomial.Legendre,
+):
+    """ Score one candidate pairing of peaks with wavelengths.
+
+    This is the scoring step of the search, without the coefficient
+    conversion that :func:`fitting` performs.  ``convert()`` costs about half
+    of the time of one candidate, and the search scores hundreds of thousands
+    of them; the winning candidate is converted once, by :func:`fitting`.
+
+    Returns
+    -------
+    float
+        The score, or ``nan`` when the combination could not be fitted.
+    """
+    try:
+        fitted = poly_form.fit(ys, wls, deg=deg)
+    except (ValueError, TypeError, np.linalg.LinAlgError):
+        return np.nan
+    return calculate_fitting_score(fitted, known_wls, all_peak_ys)
+
+
+def score_candidates(candidates, known_wls, all_peak_ys, poly_form):
+    """Score a batch of candidate pairings inside one worker.
+
+    Batching avoids pickling *known_wls*, *all_peak_ys* and *poly_form* for
+    every candidate, and gives joblib enough work per task to stay useful.
+
+    Parameters
+    ----------
+    candidates
+        Sequence of ``(ys, wls, deg)`` triples.
+    known_wls, all_peak_ys, poly_form
+        Shared between every candidate of the batch.
+
+    Returns
+    -------
+    list of float
+        One score per candidate, in order.
+    """
+    return [
+        score_combination(ys, wls, known_wls, all_peak_ys, deg, poly_form)
+        for ys, wls, deg in candidates
+    ]
 
 
 def fitting(
@@ -78,17 +185,25 @@ def fitting(
 ):
     """ Fit the solution for given y coordinates and wavelengths, and
     use the known wavelengths and all detected peaks to calculate
-    a "score" for the fitting. """
+    a "score" for the fitting.
+
+    Returns
+    -------
+    ndarray
+        The ``deg + 1`` coefficients followed by the score.  A score of
+        ``nan`` marks a combination that could not be fitted; the caller
+        must skip it rather than treat it as the best fit.
+    """
     try:
         coeffs = poly_form.fit(ys, wls, deg=deg).convert().coef
-        poss_poly = poly_form(coeffs)
-        # calculate a "score" for the fitting
-        score = calculate_fitting_score(
-            poss_poly, known_wls, all_peak_ys)
-    except:  # noqa: E722
+    except (ValueError, TypeError, np.linalg.LinAlgError):
         coeffs = np.full(deg+1, 0., dtype=float)
         coeffs[0] = -1.
-        score = -1.
+        return np.append(coeffs, np.nan)
+    poss_poly = poly_form(coeffs)
+    # calculate a "score" for the fitting
+    score = calculate_fitting_score(
+        poss_poly, known_wls, all_peak_ys)
     output = np.append(coeffs, score)
     return output
 
@@ -118,6 +233,15 @@ def find_poss_wavelength_solution(
     # NOTE:
     # (1) known_wls should be included in all_peak_ys
     # (2) poss_wls should be included in poss_ys
+
+    Returns
+    -------
+    poss_poly
+        The best polynomial found.
+    score
+        Its score.  A negative score marks that no combination produced a
+        usable fit, in which case *poss_poly* is a dummy that must not be
+        used.
     """
     # sort
     poss_wls = np.sort(poss_wls)
@@ -126,49 +250,73 @@ def find_poss_wavelength_solution(
     all_peak_ys = np.sort(all_peak_ys)
     deg = min_deg  # the minimum degree
     # full search: try to find the best solution. Could take a while.
+    #
+    # Only the peak and wavelength pairs travel to the workers.  The shared
+    # arrays, and the polynomial class, are passed once per batch: pickling a
+    # class object for every candidate used to cost more than the fit itself.
+    candidates = []
     if full_search:
-        inputs = []
-        for n in range(deg+1, min(len(poss_ys), len(poss_wls))+1):
-            # possible combination
-            ys_poss_comb = np.array(list(combinations(poss_ys, n)))
-            wls_poss_comb = np.array(list(combinations(poss_wls, n)))
-            # all possible pairs of combinations
-            inputs += list(product(
-                ys_poss_comb, wls_poss_comb,
-                [known_wls], [all_peak_ys],
-                [int(n-1)], [poly_form]
-            ))
-    # the initial guess is good enough:
-    # e.g., "poss_wls" and "poss_ys" exactly match each other,
-    # corresponding to [deg+1] known lines.
-    # e.g., at least [deg+1] lines with "poss_wls" are
-    # included in those with "poss_ys"
+        degrees = range(deg + 1, min(len(poss_ys), len(poss_wls)) + 1)
     else:
-        # possible combination
-        ys_poss_comb = np.array(list(combinations(poss_ys, deg+1)))
-        wls_poss_comb = np.array(list(combinations(poss_wls, deg+1)))
-        # all possible pairs of combinations
-        inputs = list(product(
-            ys_poss_comb, wls_poss_comb,
-            [known_wls], [all_peak_ys],
-            [deg], [poly_form]
-        ))
+        # the initial guess is good enough: e.g., "poss_wls" and "poss_ys"
+        # exactly match each other, corresponding to [deg+1] known lines
+        degrees = [deg + 1]
+    for n in degrees:
+        for ys_comb in combinations(poss_ys, n):
+            ys_array = np.asarray(ys_comb, dtype=float)
+            for wls_comb in combinations(poss_wls, n):
+                candidates.append(
+                    (ys_array, np.asarray(wls_comb, dtype=float), n - 1)
+                )
+
     # fit for all possible pairs of combinations
-    if len(inputs):
+    poss_poly = None
+    score = -1.
+    if candidates:
+        # Contiguous chunks, so that concatenating the results keeps the score
+        # order aligned with *candidates*.
+        n_chunks = min(len(candidates), 4 * (os.cpu_count() or 1))
+        edges = np.linspace(0, len(candidates), n_chunks + 1).astype(int)
+        chunks = [
+            candidates[edges[i]:edges[i + 1]]
+            for i in range(n_chunks)
+            if edges[i] < edges[i + 1]
+        ]
         outputs = prun(
-            function=fitting,
-            inputs=inputs,
+            function=score_candidates,
+            inputs=[
+                (chunk, known_wls, all_peak_ys, poly_form)
+                for chunk in chunks
+            ],
             parallel=parallel, n_jobs=n_jobs, backend=backend,
         )
-        # find the best coefficients
-        scores = [outputs[i][-1] for i in range(len(outputs))]
-        score = np.nanmin(scores)
-        poss_coeffs = outputs[np.nanargmin(scores)][:-1]
-        poss_poly = poly_form(poss_coeffs)
-    else:
+        scores = np.concatenate(
+            [np.asarray(output, dtype=float) for output in outputs])
+        # combinations that could not be fitted are skipped, but never
+        # silently
+        n_failed = int(np.count_nonzero(~np.isfinite(scores)))
+        if n_failed:
+            warnings.warn(
+                f"{n_failed} of {len(scores)} line combinations could not "
+                f"be fitted and were skipped.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        if np.any(np.isfinite(scores)):
+            # find the best combination, and fit it once for its portable
+            # coefficients
+            best = int(np.nanargmin(scores))
+            ys_best, wls_best, deg_best = candidates[best]
+            output = fitting(
+                ys_best, wls_best, known_wls, all_peak_ys,
+                deg=deg_best, poly_form=poly_form,
+            )
+            score = float(output[-1])
+            poss_poly = poly_form(output[:-1])
+    if poss_poly is None:
+        # no combination produced a usable fit
         coeffs = np.full(deg+1, 0., dtype=float)
         coeffs[0] = -1.
-        score = -1.
         poss_poly = poly_form(coeffs)
     return poss_poly, score
 
@@ -277,16 +425,21 @@ def wavelength_calibration(
         poss_poly, score = refine_poss_solution(
             guess_poss_poly, known_wls, all_peak_ys,
         )
-    if auto_refine:
+    if auto_refine and score >= 0:
         while True:
             # use poss_ys and poss_wls to refine the solution
             old_score = float(score)
             poss_poly, score = refine_poss_solution(
                 poss_poly, poss_wls, poss_ys,
             )
+            # a non-finite score cannot converge
+            if not np.isfinite(score):
+                break
             if np.isclose(old_score, score, atol=1e-8):
                 break
         score = calculate_fitting_score(poss_poly, known_wls, all_peak_ys)
+        if not np.isfinite(score):
+            score = -1.
     return poss_poly, score
 
 

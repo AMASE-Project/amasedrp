@@ -1,4 +1,4 @@
-from .core import FiberMap, FibersIdentifier, TraceMask, FiberFrame, FiberProfile
+from .core import FiberMap, FibersIdentifier, TraceMask, FiberFrame
 from .reduction import (
     identify_and_trace_fibers,
     extract_spectra,
@@ -11,7 +11,6 @@ __all__ = [
     "FibersIdentifier",
     "TraceMask",
     "FiberFrame",
-    "FiberProfile",
     "identify_and_trace_fibers",
     "extract_spectra",
     "run_reduction",

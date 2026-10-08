@@ -44,8 +44,11 @@ class TraceMask:
     poly_kind
         Kind of polynomial used (default ``"legendre"``).
     domain
-        Row index range ``(row_min, row_max)`` over which the polynomials
-        are defined.
+        Row index range over which the polynomials are defined.  A single
+        ``(row_min, row_max)`` pair is broadcast to every fiber; an array
+        of shape ``(n_fibers, 2)`` gives each fiber its own range.  Each
+        fiber is fitted over the rows where it was actually traced, so the
+        range must travel with the coefficients.
 
     Examples
     --------
@@ -59,17 +62,28 @@ class TraceMask:
         coeffs: NDArray[np.floating],
         fiber_ids: NDArray[np.integer],
         poly_kind: str = "legendre",
-        domain: tuple[int, int] | None = None,
+        domain: NDArray[np.floating] | tuple[float, float] | None = None,
     ) -> None:
         self.coeffs = np.asarray(coeffs, dtype=float)
         self.fiber_ids = np.asarray(fiber_ids, dtype=int)
         self.poly_kind = poly_kind
-        self.domain = domain
 
         if self.coeffs.shape[0] != len(self.fiber_ids):
             raise ValueError(
                 "coeffs.shape[0] must match len(fiber_ids)."
             )
+
+        n_fibers = self.coeffs.shape[0]
+        if domain is None:
+            domain = np.zeros((n_fibers, 2), dtype=float)
+        domain = np.asarray(domain, dtype=float)
+        if domain.ndim == 1:
+            domain = np.tile(domain, (n_fibers, 1))
+        if domain.shape != (n_fibers, 2):
+            raise ValueError(
+                f"domain shape {domain.shape} must be ({n_fibers}, 2)."
+            )
+        self.domain = domain
 
     # ------------------------------------------------------------------ #
     #  Constructors
@@ -102,8 +116,9 @@ class TraceMask:
             Half-width of the aperture (in pixels) used for barycenter
             calculation.
         threshold_fraction
-            Flux threshold relative to the global image maximum.  Rows with
-            peak flux below this are skipped.
+            Flux threshold relative to the global image maximum.  Rows whose
+            aperture sum stays below it are skipped.  The maximum is measured
+            once, over the whole image.
 
         Returns
         -------
@@ -113,6 +128,11 @@ class TraceMask:
         n_fibers = fibermap.n_fibers
         n_rows = image.shape[0]
         center_row = int(fibermap["CENTER_ROW"][0])
+
+        # The threshold is a property of the whole image, so it is measured
+        # once here.  Measuring it inside the row loop would scan the full
+        # image once per row, which dominates the runtime.
+        threshold = threshold_fraction * float(np.nanmax(image))
 
         # Allocate trace array: -1 means "not traced / invalid"
         traces = np.full((n_fibers, n_rows), -1.0, dtype=float)
@@ -125,20 +145,20 @@ class TraceMask:
                 ini_guess=approx_x,
                 max_shift=max_shift,
                 cdisp_half_width=cdisp_half_width,
-                threshold_fraction=threshold_fraction,
+                threshold=threshold,
             )
             traces[i, :] = trace
 
-        # Fit Legendre polynomial to each trace
-        coeffs = _fit_legendre_all(traces, poly_deg)
+        # Fit Legendre polynomial to each trace.  Every fiber is fitted over
+        # its own traced row range, so the range is kept with the coefficients.
+        coeffs, domains = _fit_legendre_all(traces, poly_deg)
         fiber_ids = np.asarray(fibermap["FIBERID"], dtype=int)
-        domain = (0, n_rows - 1)
 
         return cls(
             coeffs=coeffs,
             fiber_ids=fiber_ids,
             poly_kind="legendre",
-            domain=domain,
+            domain=domains,
         )
 
     # ------------------------------------------------------------------ #
@@ -165,7 +185,7 @@ class TraceMask:
         positions = np.empty((n_fibers, n_rows), dtype=float)
 
         for i in range(n_fibers):
-            model = Legendre(self.coeffs[i], domain=self.domain)
+            model = Legendre(self.coeffs[i], domain=self.domain[i])
             positions[i, :] = model(rows)
 
         return positions
@@ -187,26 +207,45 @@ def _trace_single_fiber(
     ini_guess: float,
     max_shift: float = 1.0,
     cdisp_half_width: int = 3,
-    threshold_fraction: float = 0.1,
+    threshold: float = 0.0,
 ) -> NDArray[np.floating]:
     """Trace one fiber upward and downward from *ini_row*.
 
-    Returns a 1-D array of length ``image.shape[0]`` where ``-1`` marks
-    rows where the fiber could not be traced.
+    Parameters
+    ----------
+    image
+        2-D fiber-flat image.
+    ini_row
+        Row from which the tracing starts.
+    ini_guess
+        Initial cross-dispersion guess for *ini_row*.
+    max_shift
+        Maximum allowed shift between consecutive rows.
+    cdisp_half_width
+        Half-width of the aperture used for the barycenter.
+    threshold
+        Absolute flux threshold for the aperture sum.  The caller derives it
+        from the image maximum.
+
+    Returns
+    -------
+    ndarray
+        Array of length ``image.shape[0]`` where ``-1`` marks rows where the
+        fiber could not be traced.
     """
     n_rows, n_cols = image.shape
     trace = np.full(n_rows, -1.0, dtype=float)
 
     # Initial row
     trace[ini_row] = _barycenter_at_row(
-        image, ini_row, ini_guess, max_shift, cdisp_half_width, threshold_fraction
+        image, ini_row, ini_guess, max_shift, cdisp_half_width, threshold
     )
 
     # Upward
     for r in range(ini_row - 1, -1, -1):
         guess = trace[r + 1]
         trace[r] = _barycenter_at_row(
-            image, r, guess, max_shift, cdisp_half_width, threshold_fraction
+            image, r, guess, max_shift, cdisp_half_width, threshold
         )
         if trace[r] < 0:
             break
@@ -215,7 +254,7 @@ def _trace_single_fiber(
     for r in range(ini_row + 1, n_rows):
         guess = trace[r - 1]
         trace[r] = _barycenter_at_row(
-            image, r, guess, max_shift, cdisp_half_width, threshold_fraction
+            image, r, guess, max_shift, cdisp_half_width, threshold
         )
         if trace[r] < 0:
             break
@@ -230,7 +269,7 @@ def _barycenter_at_row(
     guess_position,
     max_shift,
     cdisp_half_width,
-    threshold_fraction,
+    threshold,
 ):
     """Compute the barycenter of a fiber at a single row.
 
@@ -252,7 +291,7 @@ def _barycenter_at_row(
         col_range[i] = col_start + i
 
     # Threshold check
-    if np.nansum(profile) <= threshold_fraction * np.nanmax(image):
+    if np.nansum(profile) <= threshold:
         return -1.0
 
     # Barycenter using only pixels above the median
@@ -273,7 +312,7 @@ def _barycenter_at_row(
 def _fit_legendre_all(
     traces: NDArray[np.floating],
     deg: int,
-) -> NDArray[np.floating]:
+) -> tuple[NDArray[np.floating], NDArray[np.floating]]:
     """Fit a Legendre polynomial of degree *deg* to each fiber trace.
 
     Parameters
@@ -286,11 +325,15 @@ def _fit_legendre_all(
 
     Returns
     -------
-    ndarray
+    coeffs
         Coefficients of shape ``(n_fibers, deg + 1)``.
+    domains
+        Fitted row range of each fiber, shape ``(n_fibers, 2)``.  Untraced
+        fibers keep ``(0, 0)``.
     """
     n_fibers, n_rows = traces.shape
     coeffs = np.zeros((n_fibers, deg + 1), dtype=float)
+    domains = np.zeros((n_fibers, 2), dtype=float)
     rows_all = np.arange(n_rows, dtype=float)
 
     for i in range(n_fibers):
@@ -313,5 +356,6 @@ def _fit_legendre_all(
 
         model = Legendre.fit(data_x, data_y, deg=deg, domain=domain)
         coeffs[i, :] = model.coef
+        domains[i, :] = domain
 
-    return coeffs
+    return coeffs, domains

@@ -17,11 +17,9 @@ from numpy.typing import NDArray
 from .core.fiberidentifier import FibersIdentifier
 from .core.fibermap import FiberMap
 from .core.fiberframe import FiberFrame
-from .core.fiberprofile import FiberProfile
 from .core.tracemask import TraceMask
 from .methods.boxcar import extract_boxcar
 from .methods.optimal import extract_optimal
-from .methods.profile_modeling import build_fiber_profile
 
 
 def identify_and_trace_fibers(
@@ -122,13 +120,13 @@ def extract_spectra(
     tracemask: TraceMask,
     fibermap: FiberMap,
     method: str = "boxcar",
-    fiber_profile: FiberProfile | None = None,
+    flat_image: NDArray[np.floating] | None = None,
     wave: NDArray[np.floating] | None = None,
     variance: NDArray[np.floating] | None = None,
     mask: NDArray[np.bool_] | None = None,
     aperture_radius: int = 3,
-    sigma_clip: float = 5.0,
-    maxiter: int = 5,
+    gain: float = 1.0,
+    read_noise: float = 1.0,
     meta: dict[str, Any] | None = None,
 ) -> FiberFrame:
     """Extract 1-D spectra from a 2-D image using traced fiber positions.
@@ -143,20 +141,23 @@ def extract_spectra(
         Per-fiber metadata table.
     method
         Extraction method: ``"boxcar"`` or ``"optimal"``.
-    fiber_profile
-        Required when *method* is ``"optimal"``.
+    flat_image
+        Fiber-flat image.  Required when *method* is ``"optimal"``, because
+        flat-relative extraction needs the flat itself.
     wave
         Optional wavelength array.  Defaults to pixel indices ``[0, n_rows)``.
     variance
-        Optional variance image.
+        Optional variance image.  Used by boxcar extraction only; FOX builds
+        its own noise model from the science counts.
     mask
         Optional boolean bad-pixel mask.
     aperture_radius
-        Aperture half-width for boxcar extraction.
-    sigma_clip
-        Sigma-clipping threshold for optimal extraction.
-    maxiter
-        Maximum rejection iterations for optimal extraction.
+        Aperture half-width, for boxcar extraction and for the flat aperture
+        of optimal extraction.
+    gain
+        Detector gain in electrons per ADU, for optimal extraction.
+    read_noise
+        Detector read noise in electrons, for optimal extraction.
     meta
         Optional metadata dictionary.
 
@@ -168,17 +169,30 @@ def extract_spectra(
     Raises
     ------
     ValueError
-        If *method* is unknown or ``"optimal"`` is requested without
-        *fiber_profile*.
+        If *method* is unknown, if ``"optimal"`` is requested without
+        *flat_image*, or if a *variance* image is passed to ``"optimal"``.
     """
     if method not in ("boxcar", "optimal"):
         raise ValueError(f"Unknown extraction method: {method!r}")
 
-    if method == "optimal" and fiber_profile is None:
-        raise ValueError('method="optimal" requires fiber_profile.')
+    if method == "optimal":
+        if flat_image is None:
+            raise ValueError('method="optimal" requires flat_image.')
+        if variance is not None:
+            raise ValueError(
+                'method="optimal" builds its own noise model from the science '
+                "counts; pass gain and read_noise instead of variance."
+            )
 
     rows = np.arange(image.shape[0], dtype=int)
     trace_positions = tracemask.eval(rows)
+
+    # Outside a fiber's fitted row range the polynomial extrapolates, so the
+    # position carries no information.  Mark those rows invalid instead.
+    outside = (rows[None, :] < tracemask.domain[:, 0:1]) | (
+        rows[None, :] > tracemask.domain[:, 1:2]
+    )
+    trace_positions[outside] = np.nan
 
     if method == "boxcar":
         flux, ivar, out_mask = extract_boxcar(
@@ -191,12 +205,12 @@ def extract_spectra(
     else:  # optimal
         flux, ivar, out_mask = extract_optimal(
             image=image,
+            flat_image=flat_image,
             trace_positions=trace_positions,
-            fiber_profile=fiber_profile,
-            variance=variance,
+            aperture_radius=aperture_radius,
+            gain=gain,
+            read_noise=read_noise,
             mask=mask,
-            sigma_clip=sigma_clip,
-            maxiter=maxiter,
         )
 
     if wave is None:
@@ -208,8 +222,8 @@ def extract_spectra(
         **(meta or {}),
     }
     if method == "optimal":
-        extraction_meta["SIGMA_CLIP"] = sigma_clip
-        extraction_meta["MAXITER"] = maxiter
+        extraction_meta["GAIN"] = gain
+        extraction_meta["RDNOISE"] = read_noise
 
     return FiberFrame(
         wave=wave,
@@ -284,21 +298,23 @@ def run_reduction(
     n_fibers_per_block_expected: int = 29,
     method: str = "optimal",
     aperture_radius: int = 3,
-    profile_half_width: int = 5,
     poly_deg: int = 10,
+    gain: float = 1.0,
+    read_noise: float = 1.0,
     variance: NDArray[np.floating] | None = None,
     mask: NDArray[np.bool_] | None = None,
     meta: dict[str, Any] | None = None,
     **identify_kwargs: Any,
 ) -> FiberFrame:
-    """Full reduction: identify fibers, build profile, and extract spectra.
+    """Full reduction: identify fibers, trace them, and extract spectra.
 
     Parameters
     ----------
     image
         2-D science image.
     flat_image
-        2-D fiber-flat image.
+        2-D fiber-flat image.  Used for identification, tracing, and the
+        flat-relative weights of optimal extraction.
     n_blocks_expected
         Expected number of fiber blocks.
     n_fibers_per_block_expected
@@ -306,13 +322,15 @@ def run_reduction(
     method
         ``"optimal"`` (default) or ``"boxcar"``.
     aperture_radius
-        Boxcar aperture half-width (used for boxcar or fallback).
-    profile_half_width
-        Half-width for fiber profile extraction from flat.
+        Aperture half-width.
     poly_deg
         Trace polynomial degree.
+    gain
+        Detector gain in electrons per ADU, for optimal extraction.
+    read_noise
+        Detector read noise in electrons, for optimal extraction.
     variance
-        Optional variance image.
+        Optional variance image, for boxcar extraction.
     mask
         Optional bad-pixel mask.
     meta
@@ -334,20 +352,16 @@ def run_reduction(
     )
 
     if method == "optimal":
-        fiber_profile = build_fiber_profile(
-            flat_image=flat_image,
-            tracemask=tracemask,
-            fibermap=fibermap,
-            half_width=profile_half_width,
-        )
         return extract_spectra(
             image=image,
             tracemask=tracemask,
             fibermap=fibermap,
             method="optimal",
-            fiber_profile=fiber_profile,
-            variance=variance,
+            flat_image=flat_image,
             mask=mask,
+            aperture_radius=aperture_radius,
+            gain=gain,
+            read_noise=read_noise,
             meta=meta,
         )
 

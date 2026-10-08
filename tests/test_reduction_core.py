@@ -19,50 +19,9 @@ from amasedrp.reduction.core.fibermap import FiberMap
 from amasedrp.reduction.core.fiberidentifier import FibersIdentifier
 from amasedrp.reduction.core.tracemask import TraceMask
 from amasedrp.reduction.core.fiberframe import FiberFrame
-from amasedrp.reduction.core.fiberprofile import FiberProfile
 
-
-# ---------------------------------------------------------------------------
-# Synthetic data helpers
-# ---------------------------------------------------------------------------
-
-def _synthetic_fiber_flat(
-    n_rows: int = 2048,
-    n_blocks: int = 3,
-    n_fibers_per_block: int = 5,
-    block_gap: int = 100,
-    fiber_spacing: int = 15,
-    fiber_sigma: float = 2.5,
-    noise_std: float = 0.02,
-) -> tuple[np.ndarray, list[float]]:
-    """Generate a synthetic fiber-flat image for testing.
-
-    Returns a 2-D array (n_rows, n_cols) with Gaussian fiber profiles
-    arranged in blocks along the cross-dispersion (x) axis, and a list
-    of the true fiber center positions.
-    """
-    # Calculate image width
-    fiber_profile_width = int(6 * fiber_sigma)
-    block_width = n_fibers_per_block * fiber_spacing + fiber_profile_width
-    n_cols = n_blocks * block_width + (n_blocks - 1) * block_gap
-
-    image = np.zeros((n_rows, n_cols), dtype=np.float64)
-    x = np.arange(n_cols)
-
-    col_offset = fiber_profile_width // 2
-    fiber_centers = []
-    for b in range(n_blocks):
-        for f in range(n_fibers_per_block):
-            center = col_offset + f * fiber_spacing
-            fiber_centers.append(float(center))
-            profile = np.exp(-0.5 * ((x - center) / fiber_sigma) ** 2)
-            # Add the same profile to every row (perfectly straight fibers)
-            image += profile[np.newaxis, :]
-        col_offset += block_width + block_gap
-
-    # Add small noise
-    image += np.random.default_rng(42).normal(0, noise_std, image.shape)
-    return image, fiber_centers
+# Shared synthetic fiber flat; see tests/synthetic.py for the geometry.
+from synthetic import synthetic_fiber_flat as _synthetic_fiber_flat
 
 
 # ---------------------------------------------------------------------------
@@ -163,31 +122,43 @@ class TestFibersIdentifier:
         assert fibermap.n_fibers == 15
         assert len(np.unique(fibermap["BLOCKID"])) == 3
 
-    def test_strict_mode_missing_fiber_raises(self):
-        """S2: Strict mode raises ValueError when fiber count mismatch."""
-        # Create image with only 4 fibers in block 1
-        image, _ = _synthetic_fiber_flat(
-            n_rows=512, n_blocks=2, n_fibers_per_block=5,
-        )
-        # Remove one fiber by zeroing out a region in the middle row band
-        # (this is a crude way to simulate a missing fiber)
-        center = 256
-        band = image[center - 10:center + 10, :]
-        # Find approximate location of fiber 7 (block 1, local 2)
-        # and zero it — this may or may not trigger missing fiber depending
-        # on exact layout, so instead we just claim strict mode exists
+    def test_strict_mode_raises_on_fiber_count_mismatch(self):
+        """S2: Strict mode raises when a block holds too few fibers."""
+        # Three blocks of 4 fibers, but 5 per block are expected.
+        image, _ = _synthetic_fiber_flat(n_fibers_per_block=4)
         identifier = FibersIdentifier(
             image=image,
-            n_blocks_expected=2,
+            n_blocks_expected=3,
             n_fibers_per_block_expected=5,
             strict=True,
         )
-        # We expect the synthetic image to have exactly 5 fibers per block,
-        # so this should pass.  To really test strict mode we need a
-        # deliberately broken image, but that test is left as a TODO for
-        # manual QA with real data.
-        fibermap = identifier.identify()
-        assert fibermap.n_fibers == 10
+        with pytest.raises(ValueError, match="expected 5 fibers, found 4"):
+            identifier.identify()
+
+    def test_non_strict_warns_and_marks_block_invalid(self):
+        """S2: Non-strict mode warns and flags the affected fibers."""
+        # Real fiber flats always miss a few fibers, so the run must not stop;
+        # the caller needs the QA flag instead.
+        image, _ = _synthetic_fiber_flat(n_fibers_per_block=4)
+        identifier = FibersIdentifier(
+            image=image,
+            n_blocks_expected=3,
+            n_fibers_per_block_expected=5,
+            strict=False,
+        )
+        with pytest.warns(RuntimeWarning) as record:
+            fibermap = identifier.identify()
+
+        # One warning per block, naming the block and the count.
+        assert len(record) == 3
+        assert "Block 0: expected 5 fibers, found 4." == str(
+            record[0].message
+        )
+
+        # The fibers that were found are kept, and every block is flagged.
+        assert fibermap.n_fibers == 12
+        assert len(np.unique(fibermap["BLOCKID"])) == 3
+        assert not fibermap["VALID"].any()
 
     def test_center_row_defaults_to_middle(self):
         """S1: Default center_row is image.shape[0] // 2."""
@@ -293,6 +264,47 @@ class TestTraceMask:
             fibermap=fm, image=image, poly_deg=3,
         )
         np.testing.assert_array_equal(tracemask.fiber_ids, fm["FIBERID"])
+
+    def test_partial_trace_keeps_its_own_domain(self):
+        """S2: A partly traced fiber is evaluated on its own fit domain.
+
+        A fiber is fitted over the rows where it was actually traced, so the
+        fitted row range has to travel with the coefficients.  Evaluating the
+        same coefficients over the full image row range shifts the trace by
+        several pixels.
+        """
+        n_rows, n_cols = 1000, 360
+        image = np.zeros((n_rows, n_cols), dtype=np.float64)
+        x = np.arange(n_cols)
+
+        # One curved fiber that only exists on rows 100..200.
+        rows_valid = np.arange(100, 201)
+        true_center = np.full(n_rows, np.nan)
+        true_center[rows_valid] = (
+            300.0 + 0.05 * rows_valid + 1e-4 * rows_valid ** 2
+        )
+        for row in rows_valid:
+            image[row, :] = np.exp(-0.5 * ((x - true_center[row]) / 2.0) ** 2)
+
+        fm = FiberMap.from_arrays(
+            fiber_ids=np.array([0]),
+            block_ids=np.array([0]),
+            approx_x=np.array([float(true_center[150])]),
+            center_row=150,
+        )
+        tracemask = TraceMask.from_fibermap(
+            fibermap=fm,
+            image=image,
+            poly_deg=4,
+            max_shift=2.0,
+            cdisp_half_width=3,
+        )
+
+        np.testing.assert_allclose(tracemask.domain[0], [100.0, 200.0])
+        positions = tracemask.eval(rows_valid)[0]
+        np.testing.assert_allclose(
+            positions, true_center[rows_valid], atol=0.5,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -425,81 +437,3 @@ class TestFiberFrame:
         assert restored.fibermap.n_fibers == 10
         assert restored.meta.get("PIPELINE") == "amasedrp"
 
-
-# ---------------------------------------------------------------------------
-# FiberProfile tests
-# ---------------------------------------------------------------------------
-
-class TestFiberProfile:
-    """Tests for the FiberProfile PSF model container."""
-
-    def test_create_and_normalize(self):
-        """S1: Profile rows with positive sums are normalized to 1."""
-        profile = np.ones((5, 10, 7), dtype=float)
-        offsets = np.arange(-3, 4, dtype=float)
-        fp = FiberProfile(profile, offsets)
-        np.testing.assert_allclose(
-            fp.profile.sum(axis=-1), 1.0, atol=1e-12,
-        )
-
-    def test_zero_sum_fallback_to_delta(self):
-        """S2: Zero-sum rows fall back to centered delta profile."""
-        profile = np.zeros((2, 3, 5), dtype=float)
-        offsets = np.arange(-2, 3, dtype=float)
-        fp = FiberProfile(profile, offsets)
-        # Center offset index is 2
-        assert fp.profile[0, 0, 2] == 1.0
-        assert fp.profile[0, 0, :2].sum() == 0.0
-        assert fp.profile[0, 0, 3:].sum() == 0.0
-
-    def test_rejects_bad_shapes(self):
-        """S2: Bad profile/x_offsets shapes raise ValueError."""
-        with pytest.raises(ValueError):
-            FiberProfile(np.ones((5, 10)), np.arange(7))  # profile 2-D
-        with pytest.raises(ValueError):
-            FiberProfile(np.ones((5, 10, 7)), np.arange(7).reshape(7, 1))  # offsets 2-D
-        with pytest.raises(ValueError):
-            FiberProfile(np.ones((5, 10, 7)), np.arange(5))  # mismatch
-
-    def test_rejects_mismatched_fibermap(self):
-        """S2: fibermap row count must match n_fibers."""
-        profile = np.ones((5, 10, 7), dtype=float)
-        offsets = np.arange(-3, 4, dtype=float)
-        fm = FiberMap.from_arrays(
-            fiber_ids=np.arange(3),
-            block_ids=np.zeros(3, dtype=int),
-            approx_x=np.arange(3),
-            center_row=512,
-        )
-        with pytest.raises(ValueError):
-            FiberProfile(profile, offsets, fibermap=fm)
-
-    def test_at_returns_slice(self):
-        """S1: at() returns the correct 1-D slice."""
-        profile = np.ones((5, 10, 7), dtype=float)
-        offsets = np.arange(-3, 4, dtype=float)
-        fp = FiberProfile(profile, offsets)
-        sl = fp.at(2, 3)
-        assert sl.shape == (7,)
-        np.testing.assert_allclose(sl, fp.profile[2, 3, :])
-
-    def test_fits_roundtrip(self, tmp_path):
-        """S1: FITS write + read preserves data."""
-        profile = np.random.default_rng(42).random((4, 20, 7))
-        offsets = np.arange(-3, 4, dtype=float)
-        fm = FiberMap.from_arrays(
-            fiber_ids=np.arange(4),
-            block_ids=np.zeros(4, dtype=int),
-            approx_x=np.arange(4),
-            center_row=512,
-        )
-        fp = FiberProfile(profile, offsets, fibermap=fm, meta={"ORIGIN": "test"})
-        path = tmp_path / "profile.fits"
-        fp.to_fits(path)
-        restored = FiberProfile.from_fits(path)
-
-        np.testing.assert_array_almost_equal(restored.profile, fp.profile)
-        np.testing.assert_array_equal(restored.x_offsets, offsets)
-        assert restored.fibermap is not None
-        assert restored.fibermap.n_fibers == 4
-        assert restored.meta.get("ORIGIN") == "test"
