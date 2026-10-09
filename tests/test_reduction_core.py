@@ -437,3 +437,55 @@ class TestFiberFrame:
         assert restored.fibermap.n_fibers == 10
         assert restored.meta.get("PIPELINE") == "amasedrp"
 
+    def test_fits_roundtrip_preserves_meta_exactly(self, tmp_path):
+        """S1: meta reads back unchanged, with no structural keys added."""
+        meta = {"PIPELINE": "amasedrp", "CHANNEL": "blue", "N_EXP": 6}
+        frame = FiberFrame(wave=np.zeros(4), flux=np.ones((2, 4)), meta=meta)
+        path = tmp_path / "frame.fits"
+        frame.to_fits(path)
+
+        assert FiberFrame.from_fits(path).meta == meta
+
+    def test_fits_stores_numpy_scalars(self, tmp_path):
+        """S1: numpy scalars are stored, not dropped silently."""
+        frame = FiberFrame(
+            wave=np.zeros(4),
+            flux=np.ones((2, 4)),
+            meta={
+                "N_EXP": np.int64(6),
+                "FLAG": np.bool_(True),
+                "SCORE": np.float64(0.5),
+            },
+        )
+        path = tmp_path / "frame.fits"
+        frame.to_fits(path)
+        meta = FiberFrame.from_fits(path).meta
+
+        assert meta["N_EXP"] == 6
+        assert meta["FLAG"] is True
+        assert meta["SCORE"] == pytest.approx(0.5)
+
+    def test_fits_rejects_metadata_it_cannot_store(self, tmp_path):
+        """S2: an unstorable meta value raises instead of vanishing."""
+        frame = FiberFrame(
+            wave=np.zeros(4),
+            flux=np.ones((2, 4)),
+            meta={"TARGET_WLS": [4390.0, 4410.0]},
+        )
+
+        with pytest.raises(TypeError, match="TARGET_WLS"):
+            frame.to_fits(tmp_path / "frame.fits")
+
+    def test_fits_skips_none_metadata(self, tmp_path):
+        """S1: a None value writes no keyword and does not raise."""
+        frame = FiberFrame(
+            wave=np.zeros(4),
+            flux=np.ones((2, 4)),
+            meta={"EXPTIME": None, "CHANNEL": "blue"},
+        )
+        path = tmp_path / "frame.fits"
+        frame.to_fits(path)
+        meta = FiberFrame.from_fits(path).meta
+
+        assert "EXPTIME" not in meta
+        assert meta["CHANNEL"] == "blue"

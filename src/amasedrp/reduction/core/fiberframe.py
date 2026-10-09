@@ -23,6 +23,60 @@ from .fibermap import FiberMap
 
 __all__ = ["FiberFrame"]
 
+#: Primary-header keywords that describe the file rather than the reduction.
+#: ``to_fits`` writes them, and ``from_fits`` leaves them out of ``meta`` so
+#: that ``meta`` survives a round trip unchanged.
+_STRUCTURAL_KEYS = frozenset(
+    {
+        "SIMPLE",
+        "BITPIX",
+        "NAXIS",
+        "EXTEND",
+        "COMMENT",
+        "HISTORY",
+        "N_FIBERS",
+        "N_WAVE",
+    }
+)
+
+#: Python types that a FITS header keyword round-trips unchanged.
+_HEADER_SCALARS = (str, bool, int, float)
+
+
+def _header_value(key: str, value: Any) -> Any:
+    """Return *value* as a FITS header scalar, or ``None`` to write nothing.
+
+    Parameters
+    ----------
+    key
+        Metadata key, used in the error message.
+    value
+        Value to convert.  ``None`` writes no keyword.  A numpy scalar is
+        converted to its Python equivalent.
+
+    Returns
+    -------
+    Any
+        A scalar of type ``str``, ``bool``, ``int`` or ``float``, or ``None``.
+
+    Raises
+    ------
+    TypeError
+        If *value* has no FITS header representation.  Metadata is provenance,
+        so a value that cannot be stored is an error, not something that
+        disappears without a word.
+    """
+    if value is None:
+        return None
+    if isinstance(value, np.generic):
+        value = value.item()
+    if isinstance(value, _HEADER_SCALARS):
+        return value
+    raise TypeError(
+        f"meta[{key!r}] is {type(value).__name__}, which has no FITS header "
+        f"representation; pass a scalar, or put per-fiber arrays in the fibermap."
+    )
+
 
 class FiberFrame:
     """Container for extracted row-stacked spectra.
@@ -41,7 +95,9 @@ class FiberFrame:
     fibermap
         Per-fiber metadata table.
     meta
-        Arbitrary metadata dictionary (will be written to FITS header).
+        Scalar metadata, written to the primary FITS header by :meth:`to_fits`.
+        A value of ``None`` writes no keyword.  Any other value without a FITS
+        header representation raises :exc:`TypeError` instead of disappearing.
 
     Examples
     --------
@@ -140,6 +196,19 @@ class FiberFrame:
         - IVAR: inverse variance
         - MASK: bitmask
         - FIBERMAP: binary table (if present)
+
+        Parameters
+        ----------
+        path
+            Output file.
+        overwrite
+            Replace an existing file.
+
+        Raises
+        ------
+        TypeError
+            If a ``meta`` value has no FITS header representation.  See
+            :func:`_header_value`.
         """
         path = Path(path)
         hdul = fits.HDUList()
@@ -147,8 +216,9 @@ class FiberFrame:
         # Primary HDU: metadata only (no data)
         header = fits.Header()
         for key, value in self.meta.items():
-            if isinstance(value, (str, int, float, bool)):
-                header[key] = value
+            scalar = _header_value(key, value)
+            if scalar is not None:
+                header[key] = scalar
         header["N_FIBERS"] = self.n_fibers
         header["N_WAVE"] = self.n_wave
         hdul.append(fits.PrimaryHDU(header=header))
@@ -166,11 +236,28 @@ class FiberFrame:
 
     @classmethod
     def from_fits(cls, path: str | Path) -> Self:
-        """Read a FiberFrame from a FITS file."""
+        """Read a FiberFrame from a FITS file.
+
+        Parameters
+        ----------
+        path
+            File to read, written by :meth:`to_fits`.
+
+        Returns
+        -------
+        FiberFrame
+            The frame.  ``meta`` holds the primary-header keywords except the
+            structural ones, so ``meta`` of a written frame reads back
+            unchanged.
+        """
         path = Path(path)
         with fits.open(path) as hdul:
             header = hdul[0].header
-            meta = {k: v for k, v in header.items() if k not in ("SIMPLE", "BITPIX", "NAXIS", "EXTEND") and not k.startswith("NAXIS")}
+            meta = {
+                k: v
+                for k, v in header.items()
+                if k not in _STRUCTURAL_KEYS and not k.startswith("NAXIS")
+            }
 
             wave = hdul["WAVE"].data
             flux = hdul["FLUX"].data

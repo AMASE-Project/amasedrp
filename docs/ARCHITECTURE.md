@@ -21,6 +21,7 @@ module lands.
 | Calibration | Sky subtraction | Planned |
 | Calibration | Flux calibration | Planned |
 | Post-processing | Coaddition | Planned |
+| Data products | Product tree and naming (`products.py`) | Implemented |
 
 ## Design Philosophy
 
@@ -182,8 +183,40 @@ FITS is the only on-disk format. Two classes own the I/O:
   (`N_FIBERS`, `N_WAVE` and the `meta` dictionary), then one `ImageHDU` per
   array (`WAVE`, `FLUX`, `IVAR`, `MASK`) and a `BinTableHDU` named `FIBERMAP`.
 
-None of these classes encodes a file name. The caller chooses the path. There
-is no file-naming convention yet.
+None of these classes encodes a file name; only `products.py` and the
+experiment drivers choose where a product goes.
+
+### The product tree
+
+`products.py` owns the layout, so no call site invents a path:
+
+```text
+<products_dir>/<drpver>/<night>/                 one night
+<products_dir>/<drpver>/<night>/calibration/     nightly masters and state
+<products_dir>/<drpver>/<night>/<obsid>/         one pointing sequence
+<products_dir>/<drpver>/<night>/<obsid>/qa/      its quality assessment
+```
+
+`drpver` is the version that produced the products, so reprocessing a night
+writes beside the previous reduction instead of over it. When it is not given,
+`product_dir()` reads the installed package version and raises if it cannot, so
+a product never lands in a directory named after nothing.
+
+Science products are named `<level>-<channel>-<exposure>`, for example
+`L2-blue-0001.fits`. The levels are AMASE's, not this package's: L1 is
+pre-processed, L2 extracted and wavelength-calibrated, L3 flux-calibrated and
+sky-subtracted.
+
+Calibration products such as a master bias are not data levels, so
+`product_name()` does not name them, and their file names are still chosen per
+call site.
+
+*Not settled:* whether they belong in the night's `calibration/` or inside each
+`<obsid>/`. MaNGA keeps its masters and calibration state inside the
+per-observation directory, because one MaNGA MJD observes one plate once. AMASE-P
+may reuse a previous night's calibration, which argues for the night level.
+`product_dir(..., subdir="calibration")` reaches either, so the choice does not
+change the API.
 
 ### Provenance headers
 
