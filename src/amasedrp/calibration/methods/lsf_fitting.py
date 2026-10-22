@@ -11,6 +11,38 @@ import numpy as np
 from scipy.optimize import curve_fit
 from amasedrp.calibration.methods.wavelength_calibration import detect_lines
 
+#: Smallest width a line can have, in dispersion pixels.  A Gaussian fitted to
+#: a line whose width falls below this came from a degenerate fit that
+#: collapsed onto a few samples, not from a sharp line: no feature can be
+#: resolved below the sampling.
+MIN_WIDTH_ROWS = 1.0
+
+
+def dispersion_per_row(spectrum_wls):
+    """Return the median wavelength step of a spectrum.
+
+    Parameters
+    ----------
+    spectrum_wls
+        Wavelength of each row, in Angstrom.
+
+    Returns
+    -------
+    float
+        The median absolute step between adjacent rows, in Angstrom per row,
+        or ``nan`` when the axis holds fewer than two finite rows or no step
+        at all.
+    """
+    wavelengths = np.asarray(spectrum_wls, dtype=float)
+    finite = np.isfinite(wavelengths)
+    if np.count_nonzero(finite) < 2:
+        return np.nan
+    steps = np.abs(np.diff(wavelengths[finite]))
+    steps = steps[np.isfinite(steps) & (steps > 0.0)]
+    if steps.size == 0:
+        return np.nan
+    return float(np.median(steps))
+
 
 def adjust_target_wavelength(spectrum, spectrum_wls, target_wl):
     """
@@ -157,10 +189,45 @@ def lsf_gaussian_fitting(
     )
 
 
-def lsf_fitting(spectrum, spectrum_wls, target_wl):
+def lsf_fitting(spectrum, spectrum_wls, target_wl, min_width_rows=MIN_WIDTH_ROWS):
+    """Measure the line-spread function width of one arc line.
+
+    Parameters
+    ----------
+    spectrum
+        Flux of each row.  Rows that hold no flux are ``nan``.
+    spectrum_wls
+        Wavelength of each row, in Angstrom.
+    target_wl
+        Wavelength to measure, in Angstrom.  The cut-out is centred on the
+        nearest detected peak.
+    min_width_rows
+        Reject the width when the fitted Gaussian is narrower than this many
+        dispersion pixels, and return ``nan``.  The default is
+        :data:`MIN_WIDTH_ROWS`.  Pass ``0.0`` to keep every converged fit.
+
+    Returns
+    -------
+    float
+        Full width at half maximum in Angstrom, or ``nan`` when the line could
+        not be fitted or was rejected as narrower than the sampling.
+
+    Notes
+    -----
+    The floor exists because a Gaussian fit to a few samples can converge on a
+    width far below one pixel.  Such a value is not a measurement of a sharp
+    line; it inflates the resolving power by orders of magnitude and passes
+    every downstream check that only looks for a finite number.
+    """
     target_fwhm, _, _, _, _ = lsf_gaussian_fitting(
         spectrum, spectrum_wls, target_wl,
         cutout_wl_half_width=3.,
         adjust_target_wl=True,
     )
+    if not np.isfinite(target_fwhm):
+        return np.nan
+    if min_width_rows > 0.0:
+        dispersion = dispersion_per_row(spectrum_wls)
+        if np.isfinite(dispersion) and target_fwhm < min_width_rows * dispersion:
+            return np.nan
     return target_fwhm

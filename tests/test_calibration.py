@@ -15,6 +15,7 @@ from amasedrp.calibration import (
     solve_wavelength_solution,
     thar_lines,
 )
+from amasedrp.calibration.methods.lsf_fitting import MIN_WIDTH_ROWS, dispersion_per_row
 from amasedrp.reduction.core.fiberframe import FiberFrame
 from amasedrp.reduction.core.fibermap import FiberMap
 from amasedrp.reduction.core.tracemask import TraceMask
@@ -390,6 +391,36 @@ class TestFitLineSpreadFunction:
 
         assert not lsf.valid.any()
 
+    def test_rejects_a_width_below_the_sampling(self):
+        """S1: A width under the floor becomes nan, and the warning says so."""
+        frame = self._calibrated_frame()
+        # The synthetic line is 2.355 sigma wide: about 4.7 dispersion pixels.
+        assert 2.355 * 2.0 < 5.0
+
+        with pytest.warns(RuntimeWarning, match="fell below"):
+            lsf = fit_line_spread_function(
+                frame, target_wls=np.array([4705.0, 4830.0]), min_width_rows=5.0,
+            )
+
+        assert not lsf.valid.any()
+
+    def test_the_floor_can_be_disabled(self):
+        """S1: A floor of zero keeps every converged fit."""
+        frame = self._calibrated_frame()
+        lsf = fit_line_spread_function(
+            frame, target_wls=np.array([4705.0]), min_width_rows=0.0,
+        )
+
+        assert lsf.valid.all()
+
+    def test_the_default_floor_is_one_dispersion_pixel(self):
+        """S1: The default floor leaves a line several pixels wide alone."""
+        frame = self._calibrated_frame()
+        lsf = fit_line_spread_function(frame, target_wls=np.array([4705.0]))
+
+        assert MIN_WIDTH_ROWS == 1.0
+        assert lsf.valid.all()
+
     def test_rejects_a_frame_without_a_wavelength_solution(self):
         """S2: A pixel-index frame raises ValueError."""
         frame, _ = _synthetic_arc()
@@ -407,6 +438,27 @@ class TestFitLineSpreadFunction:
         frame = self._calibrated_frame()
         with pytest.raises(ValueError, match="must be 1-D"):
             fit_line_spread_function(frame, target_wls=np.array([[4705.0]]))
+
+
+class TestDispersionPerRow:
+    """Tests for the wavelength step the width floor is measured against."""
+
+    def test_median_step(self):
+        """S1: The step is the median spacing of the wavelength axis."""
+        wavelengths = np.array([5000.0, 5000.5, 5001.0, 5001.5])
+
+        assert dispersion_per_row(wavelengths) == pytest.approx(0.5)
+
+    def test_ignores_rows_without_a_wavelength(self):
+        """S1: Rows that hold no wavelength do not enter the step."""
+        wavelengths = np.array([5000.0, np.nan, 5001.0, 5002.0])
+
+        assert dispersion_per_row(wavelengths) == pytest.approx(1.0)
+
+    def test_nan_when_there_is_no_step(self):
+        """S2: One row, or a repeated wavelength, has no step to measure."""
+        assert np.isnan(dispersion_per_row(np.array([5000.0])))
+        assert np.isnan(dispersion_per_row(np.array([5000.0, 5000.0])))
 
 
 class TestTharLines:

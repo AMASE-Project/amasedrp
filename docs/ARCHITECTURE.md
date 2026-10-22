@@ -538,9 +538,24 @@ real observations must pass a value close to one; see the wavelength paragraph
 in `AGENTS.md`.
 
 #### `lsf_fitting.py`
-- `lsf_fitting(spectrum, spectrum_wls, target_wl)` → FWHM of the line, through `lsf_gaussian_fitting` with `cutout_wl_half_width=3` and `adjust_target_wl=True`.
+- `lsf_fitting(spectrum, spectrum_wls, target_wl, min_width_rows=MIN_WIDTH_ROWS)` → FWHM of the line, through `lsf_gaussian_fitting` with `cutout_wl_half_width=3` and `adjust_target_wl=True`.
 - `lsf_gaussian_fitting(spectrum, spectrum_wls, target_wl, ...)` → FWHM, the four Gaussian parameters, the fitting function and the cutout.
+- `dispersion_per_row(spectrum_wls)` → the median wavelength step of the axis.
 - Both call `detect_lines` to centre the cutout and to reject a double peak.
+
+**The width floor.** No line can be resolved below the sampling, so a fitted
+Gaussian narrower than `MIN_WIDTH_ROWS` dispersion pixels (one pixel by
+default) is rejected and returned as `nan`. Such a fit converged onto a few
+samples; the number it produces is not a sharp line but a pathology, and a
+resolving power computed from it is wrong by orders of magnitude while still
+looking finite to every downstream check. Pass `min_width_rows=0.0` to keep
+every converged fit. `fit_line_spread_function` forwards the argument and
+counts the rejects in its warning, so a run says how many widths were dropped.
+
+The floor is deliberately conservative. On the 2025-07 sweep the narrowest
+width that survives is about 3 dispersion pixels, so the one-pixel floor
+rejects only the 4 to 6 pathological fits per 1 600 measurements, and leaves
+every real measurement untouched.
 
 ### 3.3 Planned Modules
 

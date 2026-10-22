@@ -24,7 +24,7 @@ from ..reduction.core.fiberframe import FiberFrame
 from ..reduction.core.tracemask import TraceMask
 from .core.linespreadfunction import LineSpreadFunction
 from .core.wavelengthsolution import POLY_FAMILIES, WavelengthSolution
-from .methods.lsf_fitting import lsf_fitting
+from .methods.lsf_fitting import MIN_WIDTH_ROWS, lsf_fitting
 from .methods.wavelength_calibration import detect_lines, wavelength_calibration
 
 __all__ = [
@@ -293,6 +293,7 @@ def apply_wavelength_solution(
 def fit_line_spread_function(
     frame: FiberFrame,
     target_wls: NDArray[np.floating],
+    min_width_rows: float = MIN_WIDTH_ROWS,
 ) -> LineSpreadFunction:
     """Measure the line-spread function width of arc lines.
 
@@ -311,12 +312,17 @@ def fit_line_spread_function(
         Wavelengths of the measured lines, shape ``(n_wls,)``.  Use lines that
         are isolated: a pair of strong lines inside the fitting window is
         rejected, and returns ``nan``.
+    min_width_rows
+        Reject a fitted width narrower than this many dispersion pixels and
+        return ``nan``, because no feature can be resolved below the sampling.
+        The default is ``MIN_WIDTH_ROWS``, one pixel.  Pass ``0.0`` to keep
+        every converged fit.
 
     Returns
     -------
     LineSpreadFunction
         Widths of shape ``(n_wls, n_fibers)``.  ``nan`` marks a measurement
-        that could not be fitted.
+        that could not be fitted, or that fell below the sampling floor.
 
     Raises
     ------
@@ -348,7 +354,10 @@ def fit_line_spread_function(
         spectrum_wls = frame.wave[index]
 
         for j, target_wl in enumerate(target_wls):
-            fwhm[j, index] = lsf_fitting(spectrum, spectrum_wls, target_wl)
+            fwhm[j, index] = lsf_fitting(
+                spectrum, spectrum_wls, target_wl,
+                min_width_rows=min_width_rows,
+            )
 
     if frame.fibermap is not None:
         fiber_ids = np.asarray(frame.fibermap["FIBERID"], dtype=int)
@@ -358,8 +367,9 @@ def fit_line_spread_function(
     n_failed = int(np.count_nonzero(~np.isfinite(fwhm)))
     if n_failed:
         warnings.warn(
-            f"{n_failed} of {fwhm.size} line-spread fits did not converge; "
-            f"their width is nan.",
+            f"{n_failed} of {fwhm.size} line-spread fits did not converge, or "
+            f"fell below {min_width_rows:g} dispersion pixel(s); their width is "
+            f"nan.",
             RuntimeWarning,
             stacklevel=2,
         )
