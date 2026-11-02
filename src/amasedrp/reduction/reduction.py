@@ -9,8 +9,10 @@
 
 from __future__ import annotations
 
+from functools import lru_cache
 from typing import Any
 
+import amasecore
 import numpy as np
 from numpy.typing import NDArray
 
@@ -20,6 +22,64 @@ from .core.fiberframe import FiberFrame
 from .core.tracemask import TraceMask
 from .methods.boxcar import extract_boxcar
 from .methods.optimal import extract_optimal
+
+#: Bundle whose slit layout is assumed when the caller does not name one.
+DEFAULT_BUNDLE = "canon"
+
+
+@lru_cache(maxsize=None)
+def _slit_layout(bundle: str = DEFAULT_BUNDLE) -> tuple[int, int]:
+    """Return the slit layout of one bundle, from amasecore.
+
+    Parameters
+    ----------
+    bundle
+        Bundle name, as recorded in ``amasecore``'s ``instrument/slits.yaml``.
+
+    Returns
+    -------
+    tuple of int
+        Number of blocks per slit side, and fibers per block.
+
+    Raises
+    ------
+    ValueError
+        If amasecore holds no single layout for *bundle*.
+    """
+    table = amasecore.load_table(amasecore.data_path("instrument", "slits.yaml"))
+    found = table[table["BUNDLE"] == bundle]
+    if len(found) != 1:
+        raise ValueError(
+            f"amasecore holds no single slit layout for bundle {bundle!r}; "
+            f"available: {[str(name) for name in table['BUNDLE']]}"
+        )
+    return int(found[0]["BLOCKS"]), int(found[0]["FIBERS_PER_BLOCK"])
+
+
+def _resolve_layout(
+    blocks: int | None, fibers_per_block: int | None
+) -> tuple[int, int]:
+    """Fill in whichever of the two layout numbers the caller left out.
+
+    Parameters
+    ----------
+    blocks
+        Expected number of blocks, or ``None`` to take it from amasecore.
+    fibers_per_block
+        Expected fibers per block, or ``None`` to take it from amasecore.
+
+    Returns
+    -------
+    tuple of int
+        The two numbers, both resolved.
+    """
+    if blocks is not None and fibers_per_block is not None:
+        return blocks, fibers_per_block
+    default_blocks, default_fibers = _slit_layout()
+    return (
+        default_blocks if blocks is None else blocks,
+        default_fibers if fibers_per_block is None else fibers_per_block,
+    )
 
 
 def identify_and_trace_fibers(
@@ -85,8 +145,8 @@ def identify_and_trace_fibers(
     --------
     >>> fibermap, tracemask = identify_and_trace_fibers(
     ...     image=fflat,
-    ...     n_blocks_expected=19,
-    ...     n_fibers_per_block_expected=29,
+    ...     n_blocks_expected=22,
+    ...     n_fibers_per_block_expected=25,
     ... )
     """
     identifier = FibersIdentifier(
@@ -239,8 +299,8 @@ def run_quick_reduction(
     image: NDArray[np.floating],
     flat_image: NDArray[np.floating],
     *,
-    n_blocks_expected: int = 19,
-    n_fibers_per_block_expected: int = 29,
+    n_blocks_expected: int | None = None,
+    n_fibers_per_block_expected: int | None = None,
     aperture_radius: int = 3,
     poly_deg: int = 10,
     meta: dict[str, Any] | None = None,
@@ -255,9 +315,10 @@ def run_quick_reduction(
     flat_image
         2-D fiber-flat image used for identification and tracing.
     n_blocks_expected
-        Expected number of fiber blocks.
+        Expected number of fiber blocks.  ``None`` takes it from amasecore's
+        slit layout for :data:`DEFAULT_BUNDLE`.
     n_fibers_per_block_expected
-        Expected number of fibers per block.
+        Expected number of fibers per block, resolved the same way.
     aperture_radius
         Boxcar aperture half-width.
     poly_deg
@@ -272,6 +333,9 @@ def run_quick_reduction(
     FiberFrame
         Boxcar-extracted spectra.
     """
+    n_blocks_expected, n_fibers_per_block_expected = _resolve_layout(
+        n_blocks_expected, n_fibers_per_block_expected
+    )
     fibermap, tracemask = identify_and_trace_fibers(
         image=flat_image,
         n_blocks_expected=n_blocks_expected,
@@ -294,8 +358,8 @@ def run_reduction(
     image: NDArray[np.floating],
     flat_image: NDArray[np.floating],
     *,
-    n_blocks_expected: int = 19,
-    n_fibers_per_block_expected: int = 29,
+    n_blocks_expected: int | None = None,
+    n_fibers_per_block_expected: int | None = None,
     method: str = "optimal",
     aperture_radius: int = 3,
     poly_deg: int = 10,
@@ -316,9 +380,10 @@ def run_reduction(
         2-D fiber-flat image.  Used for identification, tracing, and the
         flat-relative weights of optimal extraction.
     n_blocks_expected
-        Expected number of fiber blocks.
+        Expected number of fiber blocks.  ``None`` takes it from amasecore's
+        slit layout for :data:`DEFAULT_BUNDLE`.
     n_fibers_per_block_expected
-        Expected number of fibers per block.
+        Expected number of fibers per block, resolved the same way.
     method
         ``"optimal"`` (default) or ``"boxcar"``.
     aperture_radius
@@ -343,6 +408,9 @@ def run_reduction(
     FiberFrame
         Extracted spectra.
     """
+    n_blocks_expected, n_fibers_per_block_expected = _resolve_layout(
+        n_blocks_expected, n_fibers_per_block_expected
+    )
     fibermap, tracemask = identify_and_trace_fibers(
         image=flat_image,
         n_blocks_expected=n_blocks_expected,

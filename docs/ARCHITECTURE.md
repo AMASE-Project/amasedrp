@@ -238,7 +238,9 @@ Each applied step also adds a `HISTORY` entry.
 | `data/raw/` | Incoming frames | Ignored, `.gitkeep` only |
 | `data/interim/` | Intermediate products | Ignored, `.gitkeep` only |
 | `data/products/` | Science-ready products | Ignored, `.gitkeep` only |
-| `data/refdata/` | Reference data, e.g. `linelist_ThAr.txt` | Committed |
+
+There is no `data/refdata/`: the ThAr atlas and the per-channel selection moved
+to `amasecore`, which owns reference data for the survey.
 
 The code never assumes these paths. Every path is an argument of the calling
 function.
@@ -445,8 +447,8 @@ The public API is intentionally minimal:
 # Identification and tracing
 fibermap, tracemask = identify_and_trace_fibers(
     image=flat_image,
-    n_blocks_expected=19,
-    n_fibers_per_block_expected=29,
+    n_blocks_expected=22,
+    n_fibers_per_block_expected=25,
 )
 
 # Extraction

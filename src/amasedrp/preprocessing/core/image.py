@@ -15,6 +15,8 @@ from typing import Any, Self
 import numpy as np
 from astropy.io import fits
 
+from ...products import stamp_core_version
+
 DEFAULT_GAIN = 1.0  # Default gain value in electrons/ADU (NOTE: check what it is for our CMOS camera)
 
 
@@ -107,6 +109,7 @@ class Image:
         if update_header is not None:
             header.update(update_header)
         header["BUNIT"] = "adu"
+        stamp_core_version(header)
         hdu = fits.PrimaryHDU(self.ADU, header=header)
         hdu.writeto(filename, overwrite=True)
 

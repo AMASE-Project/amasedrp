@@ -44,11 +44,25 @@ from __future__ import annotations
 
 import importlib.metadata
 from pathlib import Path
+from typing import Any
 
-__all__ = ["LEVELS", "product_dir", "product_name"]
+import amasecore
+
+__all__ = [
+    "CORE_VERSION_KEY",
+    "LEVELS",
+    "core_version",
+    "product_dir",
+    "product_name",
+    "stamp_core_version",
+]
 
 #: The AMASE data levels, in pipeline order.
 LEVELS = ("L0", "L1", "L2", "L3")
+
+#: Primary-header keyword carrying the amasecore data version.  Eight
+#: characters is the FITS limit, so the longer name is not an option.
+CORE_VERSION_KEY = "VERSCORE"
 
 
 def _drp_version() -> str:
@@ -74,6 +88,47 @@ def _drp_version() -> str:
             "installed; pass drpver=... explicitly, or install the package "
             "with `pip install -e .`."
         ) from exc
+
+
+def core_version() -> str:
+    """Return the version of the amasecore data this pipeline reads.
+
+    Returns
+    -------
+    str
+        The version, as recorded by amasecore's installation metadata.
+
+    Raises
+    ------
+    RuntimeError
+        If amasecore reports no version, which happens when a checkout is read
+        without installing it.  A product whose data version is unknown cannot
+        be reproduced, so this fails loudly rather than writing a placeholder.
+    """
+    reported = amasecore.version()
+    if reported is None:
+        raise RuntimeError(
+            "cannot determine the amasecore data version because amasecore is "
+            "not installed; a product without a data version cannot be "
+            "reproduced.  Install it with `pip install -e ../amasecore`."
+        )
+    return reported
+
+
+def stamp_core_version(header: Any) -> None:
+    """Write the amasecore data version into a FITS header, in place.
+
+    Parameters
+    ----------
+    header
+        Any mutable FITS header.
+
+    Raises
+    ------
+    RuntimeError
+        If the version is unknown.  See :func:`core_version`.
+    """
+    header[CORE_VERSION_KEY] = core_version()
 
 
 def _token(value: object, what: str) -> str:

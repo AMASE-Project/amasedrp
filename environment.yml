@@ -14,4 +14,7 @@ dependencies:
   - pytest
   - pip
   - pip:
+    # Both repositories cloned side by side, and run `conda env create -f
+    # environment.yml` from this repository's root: the path is relative.
+    - -e ../amasecore
     - -e .

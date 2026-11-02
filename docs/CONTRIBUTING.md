@@ -4,14 +4,29 @@ Thank you for your interest in contributing!
 
 ## Development Setup
 
+`amasedrp` reads survey metadata from `amasecore` (fiber geometry, slit
+layout, arc line selections). That package is not on PyPI yet, so install it
+first, from a checkout beside this one:
+
 ```bash
-# Clone the repository
+# Clone both repositories side by side
+git clone git@github.com:AMASE-Project/amasecore.git
+cd amasecore && pip install -e . && cd ..
+
 git clone https://github.com/AMASE-Project/amasedrp.git
 cd amasedrp
 
-# Install in editable mode into the Python environment you use
+# Then install the pipeline itself
 pip install -e .
 ```
+
+If `amasecore` is missing, the first import fails with `ModuleNotFoundError`,
+and a product written without it fails with a `RuntimeError` naming the data
+version that cannot be determined. Both messages say what to install.
+
+Once `amasecore` is tagged, the dependency gets pinned in `pyproject.toml` and
+this two-step dance goes away. Until then an unpinned requirement would look
+reproducible without being reproducible.
 
 If you prefer a separate conda environment, create one from
 `environment.yml` and activate the environment name given by its `name:`

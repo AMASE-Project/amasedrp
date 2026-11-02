@@ -19,6 +19,7 @@ import numpy as np
 from astropy.io import fits
 from numpy.typing import NDArray
 
+from ...products import stamp_core_version
 from .fibermap import FiberMap
 
 __all__ = ["FiberFrame"]
@@ -36,6 +37,7 @@ _STRUCTURAL_KEYS = frozenset(
         "HISTORY",
         "N_FIBERS",
         "N_WAVE",
+        "VERSCORE",
     }
 )
 
@@ -221,6 +223,7 @@ class FiberFrame:
                 header[key] = scalar
         header["N_FIBERS"] = self.n_fibers
         header["N_WAVE"] = self.n_wave
+        stamp_core_version(header)
         hdul.append(fits.PrimaryHDU(header=header))
 
         # Data HDUs

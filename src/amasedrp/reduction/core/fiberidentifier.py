@@ -58,12 +58,12 @@ class FibersIdentifier:
     --------
     >>> identifier = FibersIdentifier(
     ...     image=fflat,
-    ...     n_blocks_expected=19,
-    ...     n_fibers_per_block_expected=29,
+    ...     n_blocks_expected=22,
+    ...     n_fibers_per_block_expected=25,
     ... )
     >>> fibermap = identifier.identify(center_row=1024, band_half_width=100)
     >>> fibermap.n_fibers
-    551
+    550
     """
 
     def __init__(

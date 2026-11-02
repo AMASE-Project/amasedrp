@@ -6,22 +6,29 @@
 @Contact:      guangquan.zeng@outlook.com
 @Description:  ThAr reference lines used by the calibration stage, per channel.
 
-The lists are selections for the AMASE-P prototype spectrograph, taken from the
-2025-07 collimator-sweep reductions.  They are calibration inputs, not a lamp
-atlas: only the lines that fall inside a channel's coverage and are strong
-enough to be measured are listed here.
+The numbers live in ``amasecore``, in ``reference/thar_channels.yaml``, because
+they are survey metadata and not pipeline code.  They are calibration inputs
+rather than a lamp atlas: only the lines that fall inside a channel's coverage
+and are strong enough to be measured are listed there.
+
+This module keeps the API the calibration stage uses.  The table is read once
+per process and cached.
 """
 
 from __future__ import annotations
 
+from functools import lru_cache
 from typing import NamedTuple
 
+import amasecore
 import numpy as np
 from numpy.typing import NDArray
 
 __all__ = ["ChannelLines", "CHANNELS", "thar_lines"]
 
 CHANNELS = ("blue", "red")
+
+_LINES_PATH = amasecore.data_path("reference", "thar_channels.yaml")
 
 
 class ChannelLines(NamedTuple):
@@ -45,37 +52,16 @@ class ChannelLines(NamedTuple):
     lsf_wls: NDArray[np.floating]
 
 
-# Blue channel, wavelength coverage roughly 4390 - 5150 A.
-_BLUE = ChannelLines(
-    known_wls=np.array([
-        4545.0519, 4579.3495, 4589.8978, 4609.5673,
-        4657.9012, 4673.6609, 4703.9898, 4723.4382, 4726.8683,
-        4735.9058, 4764.8646, 4806.0205, 4808.1337, 4879.8635,
-        4894.9551, 4945.4587, 4965.0795, 5017.1628, 5044.7195,
-    ]),
-    poss_wls=np.array([
-        4657.9012, 4703.9898, 4726.8683, 4764.8646,
-        4806.0205, 4879.8635, 4894.9551,
-    ]),
-    lsf_wls=np.array([4657.9012, 4764.8646, 4965.0795]),
-)
+@lru_cache(maxsize=1)
+def _table():
+    """Return the ThAr selection table, read once per process.
 
-# Red channel, wavelength coverage roughly 6150 - 7000 A.
-_RED = ChannelLines(
-    known_wls=np.array([
-        6169.82, 6172.28, 6182.62, 6203.49, 6342.86, 6384.72, 6411.90,
-        6416.31, 6457.28, 6531.34, 6554.16, 6577.21, 6583.91, 6588.54,
-        6591.48, 6593.94, 6604.85, 6643.70, 6662.27, 6677.28, 6684.29,
-        6727.46, 6752.83, 6756.45, 6766.61, 6780.41, 6871.29, 6911.23,
-        6937.66, 6943.61, 6965.43, 6989.66,
-    ]),
-    poss_wls=np.array([
-        6182.62, 6583.91, 6588.54, 6591.48, 6752.83, 6871.29, 6965.43,
-    ]),
-    lsf_wls=np.array([6583.91, 6752.83, 6965.43]),
-)
-
-_LINES = {"blue": _BLUE, "red": _RED}
+    Returns
+    -------
+    astropy.table.Table
+        The rows of ``reference/thar_channels.yaml``.
+    """
+    return amasecore.load_table(_LINES_PATH)
 
 
 def thar_lines(channel: str) -> ChannelLines:
@@ -90,7 +76,7 @@ def thar_lines(channel: str) -> ChannelLines:
     Returns
     -------
     ChannelLines
-        The known, possible and LSF wavelengths.
+        The known, possible and LSF wavelengths, in Angstrom.
 
     Raises
     ------
@@ -99,13 +85,25 @@ def thar_lines(channel: str) -> ChannelLines:
 
     Examples
     --------
-    >>> lines = thar_lines("blue")
-    >>> lines.poss_wls.shape
-    (7,)
+    >>> blue = thar_lines("blue")
+    >>> len(blue.known_wls)
+    19
     """
-    key = channel.strip().lower()
-    if key not in _LINES:
+    name = channel.strip().lower()
+    if name not in CHANNELS:
         raise ValueError(
             f"unknown channel {channel!r}; expected one of {list(CHANNELS)}"
         )
-    return _LINES[key]
+
+    table = _table()
+    mine = table[table["CHANNEL"] == name]
+
+    def select(group: str) -> NDArray[np.floating]:
+        selected = mine[mine["GROUP"] == group]["WAVELENGTH"]
+        return np.array([float(wavelength) for wavelength in selected])
+
+    return ChannelLines(
+        known_wls=select("known"),
+        poss_wls=select("possible"),
+        lsf_wls=select("lsf"),
+    )
