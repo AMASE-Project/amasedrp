@@ -28,7 +28,7 @@ DEFAULT_BUNDLE = "canon"
 
 
 @lru_cache(maxsize=None)
-def _slit_layout(bundle: str = DEFAULT_BUNDLE) -> tuple[int, int]:
+def _slit_layout(bundle: str = DEFAULT_BUNDLE) -> tuple[int, int, str]:
     """Return the slit layout of one bundle, from amasecore.
 
     Parameters
@@ -38,13 +38,22 @@ def _slit_layout(bundle: str = DEFAULT_BUNDLE) -> tuple[int, int]:
 
     Returns
     -------
-    tuple of int
-        Number of blocks per slit side, and fibers per block.
+    tuple of int, int, str
+        Number of blocks per slit side, fibers per block, and the provenance
+        of the numbers (``design``, ``provisional`` or ``measured``).
 
     Raises
     ------
     ValueError
-        If amasecore holds no single layout for *bundle*.
+        If amasecore holds no single layout for *bundle*, or declares no
+        provenance for it.
+
+    Notes
+    -----
+    When a second geometry source arrives, such as the fibermap's own
+    positions, the product must report one status.  Take the weakest, ordered
+    ``provisional`` < ``design`` < ``measured``: a source that calls itself an
+    assumption is the one most likely to change, so it speaks loudest.
     """
     table = amasecore.load_table(amasecore.data_path("instrument", "slits.yaml"))
     found = table[table["BUNDLE"] == bundle]
@@ -53,12 +62,18 @@ def _slit_layout(bundle: str = DEFAULT_BUNDLE) -> tuple[int, int]:
             f"amasecore holds no single slit layout for bundle {bundle!r}; "
             f"available: {[str(name) for name in table['BUNDLE']]}"
         )
-    return int(found[0]["BLOCKS"]), int(found[0]["FIBERS_PER_BLOCK"])
+    status = table.meta.get("status")
+    if not isinstance(status, str) or not status:
+        raise ValueError(
+            "amasecore's slit layout declares no provenance status, so a "
+            "product could not say what its geometry rests on"
+        )
+    return int(found[0]["BLOCKS"]), int(found[0]["FIBERS_PER_BLOCK"]), status
 
 
 def _resolve_layout(
     blocks: int | None, fibers_per_block: int | None
-) -> tuple[int, int]:
+) -> tuple[int, int, str | None]:
     """Fill in whichever of the two layout numbers the caller left out.
 
     Parameters
@@ -70,15 +85,18 @@ def _resolve_layout(
 
     Returns
     -------
-    tuple of int
-        The two numbers, both resolved.
+    tuple of int, int, str or None
+        The two numbers, both resolved, and the provenance of the geometry.
+        The provenance is ``None`` when the caller supplied both numbers, since
+        a layout that amasecore does not hold has no status to report.
     """
     if blocks is not None and fibers_per_block is not None:
-        return blocks, fibers_per_block
-    default_blocks, default_fibers = _slit_layout()
+        return blocks, fibers_per_block, None
+    default_blocks, default_fibers, status = _slit_layout()
     return (
         default_blocks if blocks is None else blocks,
         default_fibers if fibers_per_block is None else fibers_per_block,
+        status,
     )
 
 
@@ -324,7 +342,9 @@ def run_quick_reduction(
     poly_deg
         Trace polynomial degree.
     meta
-        Optional metadata.
+        Optional metadata.  The provenance of the slit layout is recorded in
+        it as ``GEOMSRC`` whenever amasecore supplied the layout; a layout the
+        caller supplied carries no status, so the card is left out.
     **identify_kwargs
         Additional arguments forwarded to :func:`identify_and_trace_fibers`.
 
@@ -333,9 +353,12 @@ def run_quick_reduction(
     FiberFrame
         Boxcar-extracted spectra.
     """
-    n_blocks_expected, n_fibers_per_block_expected = _resolve_layout(
-        n_blocks_expected, n_fibers_per_block_expected
+    n_blocks_expected, n_fibers_per_block_expected, geometry_status = (
+        _resolve_layout(n_blocks_expected, n_fibers_per_block_expected)
     )
+    meta = dict(meta or {})
+    if geometry_status is not None:
+        meta["GEOMSRC"] = geometry_status
     fibermap, tracemask = identify_and_trace_fibers(
         image=flat_image,
         n_blocks_expected=n_blocks_expected,
@@ -399,7 +422,9 @@ def run_reduction(
     mask
         Optional bad-pixel mask.
     meta
-        Optional metadata.
+        Optional metadata.  The provenance of the slit layout is recorded in
+        it as ``GEOMSRC`` whenever amasecore supplied the layout; a layout the
+        caller supplied carries no status, so the card is left out.
     **identify_kwargs
         Additional arguments forwarded to :func:`identify_and_trace_fibers`.
 
@@ -408,9 +433,12 @@ def run_reduction(
     FiberFrame
         Extracted spectra.
     """
-    n_blocks_expected, n_fibers_per_block_expected = _resolve_layout(
-        n_blocks_expected, n_fibers_per_block_expected
+    n_blocks_expected, n_fibers_per_block_expected, geometry_status = (
+        _resolve_layout(n_blocks_expected, n_fibers_per_block_expected)
     )
+    meta = dict(meta or {})
+    if geometry_status is not None:
+        meta["GEOMSRC"] = geometry_status
     fibermap, tracemask = identify_and_trace_fibers(
         image=flat_image,
         n_blocks_expected=n_blocks_expected,

@@ -231,6 +231,27 @@ change the API.
 
 Each applied step also adds a `HISTORY` entry.
 
+### Geometry provenance
+
+`FiberFrame` products carry `GEOMSRC`, which says what their fiber positions
+rest on. The value is copied from `status` in amasecore's `slits.yaml`, so a
+change of data changes the products without an edit here.
+
+| `GEOMSRC` | Meaning |
+| --- | --- |
+| `design` | From the design document; no measurement exists |
+| `provisional` | A value the project knows it will replace |
+| `measured` | Measured on the built instrument |
+
+A product whose layout the caller passed in has no `GEOMSRC`: amasecore holds
+no status for that geometry, so there is nothing to claim. `Image` products
+carry none at all, because a master bias never touches a fiber position.
+
+When a second geometry source arrives, the weaker status wins, ordered
+`provisional` < `design` < `measured`. The order exists so that combining two
+sources gives one answer; it does not claim that a design value is worse than
+a provisional one.
+
 ### Header fixes on read
 
 Reading a frame goes through `Image.from_fits`, which repairs the header with
