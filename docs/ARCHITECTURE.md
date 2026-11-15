@@ -231,6 +231,23 @@ change the API.
 
 Each applied step also adds a `HISTORY` entry.
 
+### Header fixes on read
+
+Reading a frame goes through `Image.from_fits`, which repairs the header with
+the rules `amasecore` holds for that night. The night is the UTC date of
+`DATE-OBS`, because hand-typed headers get the frame type wrong: in the 2025-07
+sweep, every red arc and red flat reads `IMAGETYP='LIGHT'`.
+
+| `HDRFIX` | Meaning |
+| --- | --- |
+| `20250704` | The rules for that night were applied; each changed card has a `HISTORY` line |
+| `none` | The night is known and has no rules, which is the normal state of a new night |
+| `unknown` | `DATE-OBS` holds no readable night, so no rules could be chosen |
+
+A frame that already carries `HDRFIX` is a product: its card says what it was
+made from, so re-reading it does not rewrite that. Raw frames are never changed
+on disk, so they always pick up the rules that exist now.
+
 ### The `data/` tree
 
 | Directory | Holds | In git |

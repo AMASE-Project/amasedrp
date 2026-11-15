@@ -15,9 +15,91 @@ from typing import Any, Self
 import numpy as np
 from astropy.io import fits
 
+import amasecore
+
 from ...products import stamp_core_version
 
 DEFAULT_GAIN = 1.0  # Default gain value in electrons/ADU (NOTE: check what it is for our CMOS camera)
+
+#: Keyword recording which night's header-fix rules were applied, if any.
+#: ``none`` means the night has no rules, ``unknown`` that the night itself
+#: could not be read.  Products carry the value they were made with, so a
+#: frame that already holds this card is left alone.
+HDRFIX_KEY = "HDRFIX"
+
+
+def night_from_header(header: fits.Header) -> str | None:
+    """Return the observing night recorded in a header, as ``YYYYMMDD``.
+
+    Parameters
+    ----------
+    header
+        A FITS header.
+
+    Returns
+    -------
+    str or None
+        The UTC date of ``DATE-OBS`` without separators, or ``None`` when the
+        card is absent or does not start with a readable date.
+
+    Notes
+    -----
+    The night is the UTC date of ``DATE-OBS``, the one time stamp that travels
+    with the frames.  It is not the directory name: the 2025-07 sweep sits in a
+    directory called ``20250705`` and its frames say ``2025-07-04``.
+    """
+    raw = header.get("DATE-OBS")
+    if not isinstance(raw, str) or len(raw) < 10:
+        return None
+    digits = raw[:10].replace("-", "")
+    if len(digits) != 8 or not digits.isdigit():
+        return None
+    return digits
+
+
+def _apply_night_fixes(header: fits.Header, filename: str) -> None:
+    """Repair a raw frame's header with amasecore's rules for its night.
+
+    Parameters
+    ----------
+    header
+        The header of the frame, changed in place.
+    filename
+        Path of the frame.  Only its basename is used, matched against each
+        rule's glob.
+
+    Notes
+    -----
+    The repair is recorded rather than silently applied.  ``HDRFIX`` names the
+    night whose rules were used, and each card that changed gets a ``HISTORY``
+    line, which is what the archive shows a reader years later.
+
+    A frame that already carries ``HDRFIX`` is a product and is left alone:
+    its card says what it was made from, and re-reading it must not rewrite
+    that.  Raw frames are never modified on disk, so they are always stamped
+    from the rules that exist now.
+    """
+    if HDRFIX_KEY in header:
+        return
+
+    night = night_from_header(header)
+    if night is None:
+        header[HDRFIX_KEY] = "unknown"
+        header.add_history("amasecore hdrfix: DATE-OBS holds no readable night")
+        return
+
+    path = amasecore.hdrfix_path(night)
+    if not path.exists():
+        header[HDRFIX_KEY] = "none"
+        header.add_history(f"amasecore hdrfix: no rules for night {night}")
+        return
+
+    changes = amasecore.apply_hdrfix(header, amasecore.load_hdrfix(night), filename)
+    header[HDRFIX_KEY] = night
+    if not changes:
+        header.add_history(f"amasecore hdrfix {night}: no rule matched this frame")
+    for keyword, old, new in changes:
+        header.add_history(f"amasecore hdrfix {night}: {keyword} {old!r} -> {new!r}")
 
 
 class Image:
@@ -85,6 +167,7 @@ class Image:
         unit = header.get("BUNIT", "adu").lower()  # type: ignore[assignment]
         if unit not in ("adu", "electron"):
             unit = "adu"
+        _apply_night_fixes(header, abs_filename)
         return cls(data=data, header=header, filename=abs_filename, unit=unit)
 
     def write_to_fits(
